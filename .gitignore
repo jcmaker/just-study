@@ -1,3 +1,7 @@
 .DS_Store
 .superpowers/
 data/
+.next/
+node_modules/
+.env
+.env.local
