@@ -12,6 +12,7 @@ import {
 } from "./storage.ts";
 import {
   appendCurrentDayCheckpoint,
+  appendJournalDay,
   renderApprovedCourseMarkdown,
   renderCurrentDayMarkdown,
   renderInitialJournalMarkdown,
@@ -602,6 +603,137 @@ export function gradeQuiz(db: DatabaseHandle, dataRoot: string, input: { courseI
       }
     }
     const changed = db.prepare("UPDATE courses SET current_stage = ?, progress_markdown_sha256 = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?").run(nextStage, update.checksums["progress.md"]!, now, course.id, input.expectedRevision);
+    if (changed.changes !== 1) throw new LearningRevisionConflictError("Course revision changed");
+  });
+  return getLearningSnapshot(db, dataRoot, course.id)!;
+}
+
+function reflectionText(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > 10_000 || value.includes("\0")) {
+    throw new LearningValidationError(`${name} is outside its allowed length`);
+  }
+  return value;
+}
+
+export function completeDay(
+  db: DatabaseHandle,
+  dataRoot: string,
+  input: { courseId: string; expectedRevision: number; reflection: ReflectionInput },
+): LearningSnapshot {
+  if (
+    typeof input !== "object" || input === null || Array.isArray(input) ||
+    !UUID_PATTERN.test(input.courseId) || typeof input.reflection !== "object" ||
+    input.reflection === null || Array.isArray(input.reflection)
+  ) {
+    throw new LearningValidationError("courseId and reflection are required");
+  }
+  const reflection = {
+    learned: reflectionText(input.reflection.learned, "reflection.learned"),
+    confusing: reflectionText(input.reflection.confusing, "reflection.confusing"),
+    feeling: reflectionText(input.reflection.feeling, "reflection.feeling"),
+  };
+  const course = getCourse(db, input.courseId);
+  if (!course) throw new LearningStateError("Course does not exist");
+  assertRevision(course, input.expectedRevision);
+  if (course.status !== "active" || course.currentStage !== "reflection" || course.currentDayId === null) {
+    throw new LearningStateError("Day completion requires reflection stage");
+  }
+
+  const snapshot = getLearningSnapshot(db, dataRoot, course.id)!;
+  const day = snapshot.currentDay!;
+  if (day.completedAt !== null) throw new LearningStateError("Day is already completed");
+  const dailyResearch = snapshot.researchRuns.find((run) => run.scope === "day" && run.dayId === day.id);
+  const latestAttempt = snapshot.quizAttempts.at(-1);
+  if (!dailyResearch || !latestAttempt || latestAttempt.status !== "passed" || latestAttempt.score !== 5) {
+    throw new LearningStateError("Daily research and a passed quiz are required");
+  }
+  const nextDay = day.dayNumber === 30
+    ? null
+    : snapshot.days.find(({ dayNumber }) => dayNumber === day.dayNumber + 1) ?? null;
+  if (day.dayNumber < 30 && nextDay === null) throw new LearningStateError("Next Day is missing");
+
+  const now = new Date().toISOString();
+  const completedDays = snapshot.days.map((candidate) => candidate.id === day.id ? { ...candidate, completedAt: now } : candidate);
+  const projectedCourse: Course = day.dayNumber === 30
+    ? {
+        ...snapshot.course,
+        status: "completed",
+        currentDayId: null,
+        currentStage: null,
+        revision: snapshot.course.revision + 1,
+        currentDayMarkdownPath: null,
+        currentDayMarkdownSha256: null,
+        completedAt: now,
+        updatedAt: now,
+      }
+    : {
+        ...snapshot.course,
+        currentDayId: nextDay!.id,
+        currentStage: "lecture",
+        revision: snapshot.course.revision + 1,
+        updatedAt: now,
+      };
+  const projected: Omit<LearningSnapshot, "documents"> = {
+    course: projectedCourse,
+    days: completedDays,
+    currentDay: nextDay,
+    researchRuns: snapshot.researchRuns.filter(({ scope }) => scope === "course"),
+    understoodConcepts: [],
+    remediationConcepts: [],
+    quizAttempts: [],
+  };
+  const journal = appendJournalDay(snapshot.documents.journal!, {
+    day,
+    currentDayMarkdown: snapshot.documents.currentDay!,
+    dailyResearch,
+    quizAttempts: snapshot.quizAttempts,
+    reflection,
+    completedAt: now,
+  });
+  const update = prepareMarkdownUpdate(dataRoot, course.id, [
+    { file: "journal.md", expectedSha256: course.journalMarkdownSha256, content: journal },
+    { file: "progress.md", expectedSha256: course.progressMarkdownSha256, content: renderProgressMarkdown(projected, now) },
+    { file: "current-day.md", expectedSha256: course.currentDayMarkdownSha256, content: nextDay === null ? null : renderCurrentDayMarkdown(nextDay) },
+  ]);
+
+  commitPreparedUpdate(db, update, () => {
+    const latest = getCourse(db, course.id);
+    if (!latest || latest.status !== "active" || latest.currentStage !== "reflection" || latest.currentDayId !== day.id) {
+      throw new LearningStateError("Day completion state changed");
+    }
+    assertRevision(latest, input.expectedRevision);
+    const storedAttempt = db.prepare(`
+      SELECT status, score FROM quiz_attempts WHERE day_id = ?
+      ORDER BY attempt_number DESC LIMIT 1
+    `).get(day.id) as { status: QuizAttempt["status"]; score: number | null } | undefined;
+    const researchCount = db.prepare(`
+      SELECT COUNT(*) AS count FROM research_runs WHERE day_id = ? AND scope = 'day'
+    `).get(day.id) as { count: number };
+    if (!storedAttempt || storedAttempt.status !== "passed" || storedAttempt.score !== 5 || researchCount.count !== 1) {
+      throw new LearningStateError("Day completion prerequisites changed");
+    }
+    const completed = db.prepare(`
+      UPDATE course_days SET completed_at = ?
+      WHERE id = ? AND course_id = ? AND completed_at IS NULL
+    `).run(now, day.id, course.id);
+    if (completed.changes !== 1) throw new LearningStateError("Day is already completed");
+
+    const changed = nextDay === null
+      ? db.prepare(`
+          UPDATE courses
+          SET status = 'completed', current_day_id = NULL, current_stage = NULL,
+              revision = revision + 1, journal_markdown_sha256 = ?,
+              progress_markdown_sha256 = ?, current_day_markdown_path = NULL,
+              current_day_markdown_sha256 = NULL, completed_at = ?, updated_at = ?
+          WHERE id = ? AND revision = ?
+        `).run(update.checksums["journal.md"]!, update.checksums["progress.md"]!, now, now, course.id, input.expectedRevision)
+      : db.prepare(`
+          UPDATE courses
+          SET current_day_id = ?, current_stage = 'lecture', revision = revision + 1,
+              journal_markdown_sha256 = ?, progress_markdown_sha256 = ?,
+              current_day_markdown_sha256 = ?, updated_at = ?
+          WHERE id = ? AND revision = ?
+        `).run(nextDay.id, update.checksums["journal.md"]!, update.checksums["progress.md"]!, update.checksums["current-day.md"]!, now, course.id, input.expectedRevision);
     if (changed.changes !== 1) throw new LearningRevisionConflictError("Course revision changed");
   });
   return getLearningSnapshot(db, dataRoot, course.id)!;

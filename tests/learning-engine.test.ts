@@ -21,6 +21,7 @@ import {
   LearningStateError,
   LearningValidationError,
   approveOutline,
+  completeDay,
   getLearningSnapshot,
   gradeQuiz,
   recordDailyResearch,
@@ -28,6 +29,7 @@ import {
   startQuiz,
   startRemediationQuiz,
   type ApproveOutlineInput,
+  type LearningSnapshot,
   type QuestionGradeInput,
   type QuizAttempt,
   type ResearchBundleInput,
@@ -197,6 +199,72 @@ function readyForQuiz(db: DatabaseHandle, dataRoot: string) {
     },
     understoodConcepts: [],
     remediationConcepts: [],
+  });
+}
+
+function lessonCheckpoint(dayNumber: number) {
+  return {
+    recallMarkdown: `Day ${dayNumber} 전날 핵심 개념 회상`,
+    preciseExplanationMarkdown: `Day ${dayNumber} 정확한 설명`,
+    eli5Markdown: `Day ${dayNumber} ELI5 설명`,
+    analogyMarkdown: `Day ${dayNumber} 비유`,
+    exampleMarkdown: `Day ${dayNumber} 구체적 예제`,
+    applicationMarkdown: `Day ${dayNumber} 사용자 적용`,
+    interviewMarkdown: `Day ${dayNumber} 사용자 자기 설명과 피드백`,
+  };
+}
+
+function reflection(dayNumber: number) {
+  return {
+    learned: `Day ${dayNumber}에는 핵심 원리를 배웠다.`,
+    confusing: `Day ${dayNumber}의 경계 조건은 더 연습하고 싶다.`,
+    feeling: `Day ${dayNumber} 공부를 마친 실제 소감이다.`,
+  };
+}
+
+function passCurrentDayQuiz(db: DatabaseHandle, dataRoot: string) {
+  let snapshot = readyForQuiz(db, dataRoot);
+  snapshot = startQuiz(db, dataRoot, {
+    courseId: snapshot.course.id,
+    expectedRevision: snapshot.course.revision,
+    questions: quizQuestions("Day 1 통과"),
+  });
+  return gradeQuiz(db, dataRoot, {
+    courseId: snapshot.course.id,
+    expectedRevision: snapshot.course.revision,
+    attemptId: snapshot.quizAttempts.at(-1)!.id,
+    grades: terminalGrades(snapshot.quizAttempts.at(-1)!),
+  });
+}
+
+function passSnapshotDay(
+  db: DatabaseHandle,
+  dataRoot: string,
+  initial: LearningSnapshot,
+  dayNumber: number,
+) {
+  let snapshot = recordDailyResearch(db, dataRoot, {
+    courseId: initial.course.id,
+    expectedRevision: initial.course.revision,
+    research: dailyResearch(dayNumber),
+  });
+  snapshot = saveLearningCheckpoint(db, dataRoot, {
+    courseId: snapshot.course.id,
+    expectedRevision: snapshot.course.revision,
+    lesson: lessonCheckpoint(dayNumber),
+    understoodConcepts: [],
+    remediationConcepts: [],
+  });
+  snapshot = startQuiz(db, dataRoot, {
+    courseId: snapshot.course.id,
+    expectedRevision: snapshot.course.revision,
+    questions: quizQuestions(`Day ${dayNumber} 통과`),
+  });
+  return gradeQuiz(db, dataRoot, {
+    courseId: snapshot.course.id,
+    expectedRevision: snapshot.course.revision,
+    attemptId: snapshot.quizAttempts.at(-1)!.id,
+    grades: terminalGrades(snapshot.quizAttempts.at(-1)!),
   });
 }
 
@@ -1318,5 +1386,173 @@ test("quiz grading COMMIT failure restores responses, stage, and progress", () =
     assert.equal(after.quizAttempts[0]!.score, null);
     assert.ok(after.quizAttempts[0]!.questions.every(({ responses }) => responses.length === 0));
     assert.equal(after.documents.progress, beforeProgress);
+  });
+});
+
+test("5/5 stays in reflection and cannot advance with a missing answer", () => {
+  withDataRoot((dataRoot, db) => {
+    const snapshot = passCurrentDayQuiz(db, dataRoot);
+    assert.equal(snapshot.course.currentStage, "reflection");
+    assert.equal(snapshot.currentDay?.completedAt, null);
+    assert.equal(snapshot.documents.journal, "# 학습 기록\n");
+    const missing = reflection(1);
+    missing.confusing = " ";
+    assert.throws(() => completeDay(db, dataRoot, {
+      courseId: snapshot.course.id,
+      expectedRevision: snapshot.course.revision,
+      reflection: missing,
+    }), LearningValidationError);
+    assert.equal(getLearningSnapshot(db, dataRoot, snapshot.course.id)?.currentDay?.dayNumber, 1);
+  });
+});
+
+test("completes exactly one Day and preserves reflection wording", () => {
+  withDataRoot((dataRoot, db) => {
+    const passed = passCurrentDayQuiz(db, dataRoot);
+    const actualReflection = {
+      learned: "포인터가 아니라 ‘주소를 다루는 값’이라고 이해했다.",
+      confusing: "캐시와 메모리의 경계는 아직 헷갈린다.\n예제를 더 보고 싶다.",
+      feeling: "처음엔 막막했지만 오늘은 조금 연결됐다.",
+    };
+    const snapshot = completeDay(db, dataRoot, {
+      courseId: passed.course.id,
+      expectedRevision: passed.course.revision,
+      reflection: actualReflection,
+    });
+    assert.equal(snapshot.currentDay?.dayNumber, 2);
+    assert.equal(snapshot.course.currentStage, "lecture");
+    assert.equal(snapshot.days[0]!.completedAt !== null, true);
+    assert.equal(snapshot.days[1]!.completedAt, null);
+    for (const text of Object.values(actualReflection)) {
+      for (const line of text.split("\n")) assert.match(snapshot.documents.journal!, new RegExp(line));
+    }
+    assert.match(snapshot.documents.currentDay!, /# Day 2/);
+  });
+});
+
+test("a retry with the old revision never advances a second Day", () => {
+  withDataRoot((dataRoot, db) => {
+    const passed = passCurrentDayQuiz(db, dataRoot);
+    const input = {
+      courseId: passed.course.id,
+      expectedRevision: passed.course.revision,
+      reflection: reflection(1),
+    };
+    const completed = completeDay(db, dataRoot, input);
+    assert.throws(() => completeDay(db, dataRoot, input), LearningRevisionConflictError);
+    const resumed = getLearningSnapshot(db, dataRoot, passed.course.id)!;
+    assert.equal(resumed.currentDay?.dayNumber, 2);
+    assert.equal(resumed.days.filter(({ completedAt }) => completedAt !== null).length, 1);
+    assert.equal(resumed.course.revision, completed.course.revision);
+  });
+});
+
+test("completion rejects the wrong stage, oversized reflection, and damaged journal", async (t) => {
+  await t.test("wrong stage", () => withDataRoot((dataRoot, db) => {
+    const lecture = readyForQuiz(db, dataRoot);
+    assert.throws(() => completeDay(db, dataRoot, {
+      courseId: lecture.course.id,
+      expectedRevision: lecture.course.revision,
+      reflection: reflection(1),
+    }), LearningStateError);
+    assert.equal(getLearningSnapshot(db, dataRoot, lecture.course.id)?.currentDay?.dayNumber, 1);
+  }));
+
+  await t.test("oversized reflection", () => withDataRoot((dataRoot, db) => {
+    const passed = passCurrentDayQuiz(db, dataRoot);
+    const invalid = reflection(1);
+    invalid.learned = "x".repeat(10_001);
+    assert.throws(() => completeDay(db, dataRoot, {
+      courseId: passed.course.id,
+      expectedRevision: passed.course.revision,
+      reflection: invalid,
+    }), LearningValidationError);
+    assert.equal(getLearningSnapshot(db, dataRoot, passed.course.id)?.course.currentStage, "reflection");
+  }));
+
+  await t.test("damaged journal", () => withDataRoot((dataRoot, db) => {
+    const passed = passCurrentDayQuiz(db, dataRoot);
+    writeFileSync(join(dataRoot, passed.course.journalMarkdownPath!), "# damaged\n", "utf8");
+    assert.throws(() => completeDay(db, dataRoot, {
+      courseId: passed.course.id,
+      expectedRevision: passed.course.revision,
+      reflection: reflection(1),
+    }), /checksum mismatch/);
+    assert.equal(
+      (db.prepare("SELECT completed_at FROM course_days WHERE id = ?")
+        .get(passed.currentDay!.id) as { completed_at: string | null }).completed_at,
+      null,
+    );
+  }));
+});
+
+test("Day completion COMMIT failure restores Day, stage, and all Markdown", () => {
+  withDataRoot((dataRoot, db) => {
+    const passed = passCurrentDayQuiz(db, dataRoot);
+    const before = {
+      journal: passed.documents.journal,
+      progress: passed.documents.progress,
+      currentDay: passed.documents.currentDay,
+    };
+    db.exec(`
+      CREATE TABLE day_commit_parent (id INTEGER PRIMARY KEY);
+      CREATE TABLE day_commit_gate (
+        course_id TEXT NOT NULL,
+        missing_parent INTEGER NOT NULL,
+        FOREIGN KEY (missing_parent) REFERENCES day_commit_parent(id)
+          DEFERRABLE INITIALLY DEFERRED
+      );
+      CREATE TRIGGER fail_day_commit
+      AFTER UPDATE OF revision ON courses
+      BEGIN
+        INSERT INTO day_commit_gate VALUES (NEW.id, 1);
+      END;
+    `);
+
+    assert.throws(() => completeDay(db, dataRoot, {
+      courseId: passed.course.id,
+      expectedRevision: passed.course.revision,
+      reflection: reflection(1),
+    }), /FOREIGN KEY constraint failed/);
+
+    const after = getLearningSnapshot(db, dataRoot, passed.course.id)!;
+    assert.equal(after.course.revision, passed.course.revision);
+    assert.equal(after.course.currentStage, "reflection");
+    assert.equal(after.currentDay?.dayNumber, 1);
+    assert.equal(after.currentDay?.completedAt, null);
+    assert.equal(after.documents.journal, before.journal);
+    assert.equal(after.documents.progress, before.progress);
+    assert.equal(after.documents.currentDay, before.currentDay);
+  });
+});
+
+test("Day 30 completes the course without creating Day 31", () => {
+  withDataRoot((dataRoot, db) => {
+    let snapshot = activateCourse(db, dataRoot);
+    for (let dayNumber = 1; dayNumber <= 30; dayNumber += 1) {
+      snapshot = passSnapshotDay(db, dataRoot, snapshot, dayNumber);
+      snapshot = completeDay(db, dataRoot, {
+        courseId: snapshot.course.id,
+        expectedRevision: snapshot.course.revision,
+        reflection: reflection(dayNumber),
+      });
+    }
+    assert.equal(snapshot.course.status, "completed");
+    assert.equal(snapshot.course.currentDayId, null);
+    assert.equal(snapshot.course.currentStage, null);
+    assert.equal(snapshot.currentDay, null);
+    assert.equal(snapshot.days.length, 30);
+    assert.equal(snapshot.days.every(({ completedAt }) => completedAt !== null), true);
+    assert.equal(
+      (db.prepare("SELECT COUNT(*) AS count FROM course_days WHERE day_number = 31")
+        .get() as { count: number }).count,
+      0,
+    );
+    assert.equal(snapshot.course.currentDayMarkdownPath, null);
+    assert.equal(snapshot.documents.currentDay, null);
+    assert.throws(
+      () => readFileSync(join(dataRoot, "courses", snapshot.course.id, "current-day.md"), "utf8"),
+      { code: "ENOENT" },
+    );
   });
 });
