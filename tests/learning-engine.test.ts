@@ -693,6 +693,22 @@ test("requires two independent high-scoring supports for every major claim", () 
   });
 });
 
+test("normalizes independence keys before checking major-claim support", () => {
+  withDataRoot((dataRoot, db) => {
+    const shell = createShell(db, dataRoot);
+    const original = readFileSync(join(dataRoot, shell.markdownPath), "utf8");
+    const input = validApproval(shell.id);
+    input.research.sources[0]!.independenceKey = "same";
+    input.research.sources[1]!.independenceKey = " same ";
+
+    assert.throws(() => approveOutline(db, dataRoot, input), LearningValidationError);
+    assert.equal(getLearningSnapshot(db, dataRoot, shell.id)?.course.status, "draft");
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM course_days").get() as { count: number }).count, 0);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM research_runs").get() as { count: number }).count, 0);
+    assert.equal(readFileSync(join(dataRoot, shell.markdownPath), "utf8"), original);
+  });
+});
+
 test("persists opposing evidence and explicit uncertainty", () => {
   withDataRoot((dataRoot, db) => {
     const shell = createShell(db, dataRoot);

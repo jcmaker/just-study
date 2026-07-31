@@ -92,7 +92,7 @@ function validateResearchBundle(input: unknown): Map<string, number> {
   if (!Array.isArray(research.claims) || research.claims.length < 1 || research.claims.length > 100) throw new LearningValidationError("research claims must contain 1..100 entries");
   const sources = research.sources as readonly ResearchSourceInput[];
   const claims = research.claims as readonly ResearchClaimInput[];
-  const sourceIds = new Set<string>(), urls = new Set<string>(), ranks = new Set<number>(), totals = new Map<string, number>();
+  const sourceIds = new Set<string>(), urls = new Set<string>(), ranks = new Set<number>(), totals = new Map<string, number>(), independenceKeys = new Map<string, string>();
   let selectedCount = 0;
   for (const source of sources) {
     if (typeof source !== "object" || source === null || Array.isArray(source)) throw new LearningValidationError("research source is invalid");
@@ -101,9 +101,11 @@ function validateResearchBundle(input: unknown): Map<string, number> {
     let url: URL;
     try { url = new URL(urlText); } catch { throw new LearningValidationError("source URL is invalid or duplicated"); }
     if (!['http:', 'https:'].includes(url.protocol) || urls.has(url.href)) throw new LearningValidationError("source URL is invalid or duplicated");
-    for (const [value, name, maximum] of [[source.title, "source title", 500], [source.publisher, "source publisher", 300], [source.independenceKey, "source independence key", 200]] as const) {
+    for (const [value, name, maximum] of [[source.title, "source title", 500], [source.publisher, "source publisher", 300]] as const) {
       if (/[\r\n]/.test(requiredText(value, name, maximum))) throw new LearningValidationError(`${name} must be single-line`);
     }
+    const independenceKey = requiredText(source.independenceKey, "source independence key", 200);
+    if (/[\r\n]/.test(independenceKey)) throw new LearningValidationError("source independence key must be single-line");
     if (!Number.isInteger(source.rank) || source.rank < 1 || ranks.has(source.rank)) throw new LearningValidationError("source rank is invalid or duplicated");
     if (typeof source.selected !== "boolean") throw new LearningValidationError("source selected is invalid");
     if (source.selectionReason !== null && typeof source.selectionReason !== "string") throw new LearningValidationError("selection reason is invalid");
@@ -112,7 +114,7 @@ function validateResearchBundle(input: unknown): Map<string, number> {
     if (source.selected) { selectedCount += 1; requiredText(source.selectionReason, "selection reason", 1_000); if (total < 80) requiredText(source.limitation, "source limitation", 2_000); }
     else if (source.selectionReason !== null) throw new LearningValidationError("unselected source reason must be null");
     if (source.limitation !== null) requiredText(source.limitation, "source limitation", 2_000);
-    sourceIds.add(source.id); urls.add(url.href); ranks.add(source.rank); totals.set(source.id, total);
+    sourceIds.add(source.id); urls.add(url.href); ranks.add(source.rank); totals.set(source.id, total); independenceKeys.set(source.id, independenceKey);
   }
   if (selectedCount === 0) throw new LearningValidationError("select at least one source");
   const ranked = [...sources].sort((left, right) => left.rank - right.rank);
@@ -138,7 +140,7 @@ function validateResearchBundle(input: unknown): Map<string, number> {
     }
     if (claim.evidence.some(({ stance }) => stance === "opposes") && claim.uncertainty === null) throw new LearningValidationError("conflicting claim requires uncertainty");
     if (claim.major) {
-      const independent = new Set(claim.evidence.filter(({ sourceId, stance }) => stance === "supports" && totals.get(sourceId)! >= 80 && sources.find(({ id }) => id === sourceId)!.selected).map(({ sourceId }) => sources.find(({ id }) => id === sourceId)!.independenceKey));
+      const independent = new Set(claim.evidence.filter(({ sourceId, stance }) => stance === "supports" && totals.get(sourceId)! >= 80 && sources.find(({ id }) => id === sourceId)!.selected).map(({ sourceId }) => independenceKeys.get(sourceId)!));
       if (independent.size < 2) throw new LearningValidationError("major claim needs two independent supports");
     }
     claimIds.add(claim.id);
