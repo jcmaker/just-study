@@ -18,9 +18,12 @@ import Database from "better-sqlite3";
 import { createCourse } from "../src/server/courses.ts";
 import {
   LearningRevisionConflictError,
+  LearningStateError,
   LearningValidationError,
   approveOutline,
   getLearningSnapshot,
+  recordDailyResearch,
+  saveLearningCheckpoint,
   type ApproveOutlineInput,
   type ResearchBundleInput,
 } from "../src/server/learning.ts";
@@ -133,6 +136,29 @@ function validApproval(courseId: string): ApproveOutlineInput {
     research: validResearch(),
     days: DAY_OBJECTIVES,
   };
+}
+
+function activateCourse(db: DatabaseHandle, dataRoot: string) {
+  const shell = createShell(db, dataRoot);
+  return approveOutline(db, dataRoot, validApproval(shell.id));
+}
+
+function dailyResearch(dayNumber: number): ResearchBundleInput {
+  const bundle = validResearch();
+  bundle.questions = [`Day ${dayNumber} 목표를 설명하는 핵심 질문은 무엇인가?`];
+  bundle.topicCriteria = ["공식 자료와 실행 가능한 예제를 우선한다"];
+  bundle.narrativeMarkdown = `Day ${dayNumber} 심화 조사 본문`;
+  bundle.sources = bundle.sources.map((source, index) => ({
+    ...source,
+    id: crypto.randomUUID(),
+    url: `${source.url}/day-${dayNumber}-${index + 1}`,
+  }));
+  bundle.claims = [{
+    ...bundle.claims[0]!,
+    id: crypto.randomUUID(),
+    evidence: bundle.sources.map(({ id }) => ({ sourceId: id, stance: "supports" as const })),
+  }];
+  return bundle;
 }
 
 function seedVersionOne(dataRoot: string): string {
@@ -822,5 +848,241 @@ test("approval commit failure restores the draft course and all files", () => {
     for (const file of ["progress.md", "journal.md", "current-day.md"]) {
       assert.throws(() => readFileSync(join(dataRoot, "courses", shell.id, file), "utf8"), { code: "ENOENT" });
     }
+  });
+});
+
+test("records current-Day research without changing the lecture stage", () => {
+  withDataRoot((dataRoot, db) => {
+    const active = activateCourse(db, dataRoot);
+    const snapshot = recordDailyResearch(db, dataRoot, {
+      courseId: active.course.id,
+      expectedRevision: 1,
+      research: dailyResearch(1),
+    });
+    assert.equal(snapshot.course.revision, 2);
+    assert.equal(snapshot.course.currentStage, "lecture");
+    assert.equal(snapshot.currentDay?.dayNumber, 1);
+    assert.match(snapshot.documents.currentDay!, /Day 1 심화 조사 본문/);
+    assert.equal(
+      (db.prepare(
+        "SELECT COUNT(*) AS count FROM research_runs WHERE scope = 'day'",
+      ).get() as { count: number }).count,
+      1,
+    );
+  });
+});
+
+test("saves an interruption without changing Day or stage", () => {
+  withDataRoot((dataRoot, db) => {
+    let snapshot = activateCourse(db, dataRoot);
+    snapshot = recordDailyResearch(db, dataRoot, {
+      courseId: snapshot.course.id,
+      expectedRevision: snapshot.course.revision,
+      research: dailyResearch(1),
+    });
+    snapshot = saveLearningCheckpoint(db, dataRoot, {
+      courseId: snapshot.course.id,
+      expectedRevision: snapshot.course.revision,
+      lesson: {
+        recallMarkdown: "Day 1 선수 지식을 떠올렸다.",
+        preciseExplanationMarkdown:
+          "정확한 설명을 마치고 ELI5 설명 직전까지 진행했다.",
+      },
+      understoodConcepts: [{ key: "abstraction", label: "추상화" }],
+      remediationConcepts: [{ key: "binary", label: "이진 표현" }],
+    });
+    assert.equal(snapshot.course.currentStage, "lecture");
+    assert.equal(snapshot.currentDay?.dayNumber, 1);
+
+    db.close();
+    const reopened = openDatabase(dataRoot);
+    try {
+      const resumed = getLearningSnapshot(reopened, dataRoot, snapshot.course.id)!;
+      assert.equal(resumed.course.revision, snapshot.course.revision);
+      assert.equal(resumed.course.currentStage, "lecture");
+      assert.match(resumed.documents.currentDay!, /Day 1 심화 조사 본문/);
+      assert.match(resumed.documents.currentDay!, /ELI5 설명 직전/);
+      assert.deepEqual(resumed.understoodConcepts, [{ key: "abstraction", label: "추상화" }]);
+      assert.deepEqual(resumed.remediationConcepts, [{ key: "binary", label: "이진 표현" }]);
+    } finally {
+      reopened.close();
+    }
+  });
+});
+
+test("rejects a lesson checkpoint before daily research without side effects", () => {
+  withDataRoot((dataRoot, db) => {
+    const before = activateCourse(db, dataRoot);
+    assert.throws(() => saveLearningCheckpoint(db, dataRoot, {
+      courseId: before.course.id,
+      expectedRevision: before.course.revision,
+      lesson: { preciseExplanationMarkdown: "must not be saved before research" },
+      understoodConcepts: [{ key: "premature", label: "너무 이른 개념" }],
+      remediationConcepts: [],
+    }), LearningStateError);
+
+    const after = getLearningSnapshot(db, dataRoot, before.course.id)!;
+    assert.equal(after.course.revision, before.course.revision);
+    assert.equal(after.currentDay?.id, before.currentDay?.id);
+    assert.deepEqual(after.understoodConcepts, []);
+    assert.deepEqual(after.remediationConcepts, []);
+    assert.equal(after.documents.currentDay, before.documents.currentDay);
+    assert.equal(after.documents.progress, before.documents.progress);
+    assert.deepEqual(listTemporaryEntries(dataRoot), []);
+    assert.equal(
+      (db.prepare(
+        "SELECT COUNT(*) AS count FROM day_concepts WHERE day_id = ?",
+      ).get(before.currentDay!.id) as { count: number }).count,
+      0,
+    );
+    assert.equal(
+      (db.prepare(
+        "SELECT COUNT(*) AS count FROM day_lesson_parts WHERE day_id = ?",
+      ).get(before.currentDay!.id) as { count: number }).count,
+      0,
+    );
+  });
+});
+
+test("rejects daily research on a draft or twice for one Day", () => {
+  withDataRoot((dataRoot, db) => {
+    const draft = createShell(db, dataRoot);
+    assert.throws(() => recordDailyResearch(db, dataRoot, {
+      courseId: draft.id,
+      expectedRevision: 0,
+      research: dailyResearch(1),
+    }), LearningStateError);
+
+    let snapshot = approveOutline(db, dataRoot, validApproval(draft.id));
+    snapshot = recordDailyResearch(db, dataRoot, {
+      courseId: snapshot.course.id,
+      expectedRevision: snapshot.course.revision,
+      research: dailyResearch(1),
+    });
+    assert.throws(() => recordDailyResearch(db, dataRoot, {
+      courseId: snapshot.course.id,
+      expectedRevision: snapshot.course.revision,
+      research: dailyResearch(1),
+    }), LearningStateError);
+    assert.equal(snapshot.researchRuns.filter(({ scope }) => scope === "day").length, 1);
+  });
+});
+
+test("rejects invalid or stale checkpoints without changing persisted state", async (t) => {
+  const cases: [string, (input: Parameters<typeof saveLearningCheckpoint>[2]) => void][] = [
+    ["no lesson field", (input) => { input.lesson = {}; }],
+    ["invalid concept key", (input) => {
+      input.understoodConcepts = [{ key: "../bad", label: "bad" }];
+    }],
+    ["concept in both lists", (input) => {
+      input.understoodConcepts = [{ key: "same", label: "같은 개념" }];
+      input.remediationConcepts = [{ key: "same", label: "같은 개념" }];
+    }],
+    ["oversized lesson", (input) => {
+      input.lesson = { eli5Markdown: "x".repeat(1_000_001) };
+    }],
+    ["stale revision", (input) => { input.expectedRevision -= 1; }],
+  ];
+
+  for (const [name, mutate] of cases) {
+    await t.test(name, () => withDataRoot((dataRoot, db) => {
+      let snapshot = activateCourse(db, dataRoot);
+      snapshot = recordDailyResearch(db, dataRoot, {
+        courseId: snapshot.course.id,
+        expectedRevision: snapshot.course.revision,
+        research: dailyResearch(1),
+      });
+      const before = snapshot.documents.currentDay;
+      const input: Parameters<typeof saveLearningCheckpoint>[2] = {
+        courseId: snapshot.course.id,
+        expectedRevision: snapshot.course.revision,
+        lesson: { preciseExplanationMarkdown: "checkpoint" },
+        understoodConcepts: [],
+        remediationConcepts: [],
+      };
+      mutate(input);
+      assert.throws(() => saveLearningCheckpoint(db, dataRoot, input));
+      const after = getLearningSnapshot(db, dataRoot, snapshot.course.id)!;
+      assert.equal(after.course.revision, snapshot.course.revision);
+      assert.equal(after.documents.currentDay, before);
+      assert.deepEqual(after.understoodConcepts, []);
+      assert.deepEqual(after.remediationConcepts, []);
+    }));
+  }
+});
+
+test("a tampered current-Day file blocks checkpoint mutation", () => {
+  withDataRoot((dataRoot, db) => {
+    let snapshot = activateCourse(db, dataRoot);
+    snapshot = recordDailyResearch(db, dataRoot, {
+      courseId: snapshot.course.id,
+      expectedRevision: snapshot.course.revision,
+      research: dailyResearch(1),
+    });
+    writeFileSync(
+      join(dataRoot, snapshot.course.currentDayMarkdownPath!),
+      "# tampered\n",
+      "utf8",
+    );
+    assert.throws(() => saveLearningCheckpoint(db, dataRoot, {
+      courseId: snapshot.course.id,
+      expectedRevision: snapshot.course.revision,
+      lesson: { preciseExplanationMarkdown: "must not save" },
+      understoodConcepts: [],
+      remediationConcepts: [],
+    }), /checksum mismatch/);
+    assert.equal(
+      (db.prepare("SELECT revision FROM courses WHERE id = ?")
+        .get(snapshot.course.id) as { revision: number }).revision,
+      snapshot.course.revision,
+    );
+  });
+});
+
+test("checkpoint COMMIT failure restores concepts, revision, and Markdown", () => {
+  withDataRoot((dataRoot, db) => {
+    let snapshot = activateCourse(db, dataRoot);
+    snapshot = recordDailyResearch(db, dataRoot, {
+      courseId: snapshot.course.id,
+      expectedRevision: snapshot.course.revision,
+      research: dailyResearch(1),
+    });
+    const beforeCurrentDay = snapshot.documents.currentDay;
+    const beforeProgress = snapshot.documents.progress;
+    db.exec(`
+      CREATE TABLE checkpoint_parent (id INTEGER PRIMARY KEY);
+      CREATE TABLE checkpoint_gate (
+        course_id TEXT NOT NULL,
+        missing_parent INTEGER NOT NULL,
+        FOREIGN KEY (missing_parent) REFERENCES checkpoint_parent(id)
+          DEFERRABLE INITIALLY DEFERRED
+      );
+      CREATE TRIGGER fail_checkpoint_commit
+      AFTER UPDATE OF revision ON courses
+      BEGIN
+        INSERT INTO checkpoint_gate VALUES (NEW.id, 1);
+      END;
+    `);
+
+    assert.throws(() => saveLearningCheckpoint(db, dataRoot, {
+      courseId: snapshot.course.id,
+      expectedRevision: snapshot.course.revision,
+      lesson: { preciseExplanationMarkdown: "must roll back" },
+      understoodConcepts: [{ key: "rollback", label: "롤백" }],
+      remediationConcepts: [],
+    }), /FOREIGN KEY constraint failed/);
+
+    const after = getLearningSnapshot(db, dataRoot, snapshot.course.id)!;
+    assert.equal(after.course.revision, snapshot.course.revision);
+    assert.equal(after.course.currentStage, "lecture");
+    assert.deepEqual(after.understoodConcepts, []);
+    assert.equal(after.documents.currentDay, beforeCurrentDay);
+    assert.equal(after.documents.progress, beforeProgress);
+    assert.equal(
+      (db.prepare("SELECT COUNT(*) AS count FROM day_lesson_parts").get() as {
+        count: number;
+      }).count,
+      0,
+    );
   });
 });

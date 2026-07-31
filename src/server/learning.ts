@@ -11,6 +11,7 @@ import {
   type PreparedMarkdownUpdate,
 } from "./storage.ts";
 import {
+  appendCurrentDayCheckpoint,
   renderApprovedCourseMarkdown,
   renderCurrentDayMarkdown,
   renderInitialJournalMarkdown,
@@ -53,6 +54,14 @@ function commitPreparedUpdate(db: DatabaseHandle, update: PreparedMarkdownUpdate
 function assertRevision(course: Course, expectedRevision: number): void {
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new LearningValidationError("expectedRevision must be a non-negative integer");
   if (course.revision !== expectedRevision) throw new LearningRevisionConflictError("Course revision changed");
+}
+
+function advanceRevision(db: DatabaseHandle, courseId: string, expectedRevision: number, updatedAt: string): void {
+  const changed = db.prepare(`
+    UPDATE courses SET revision = revision + 1, updated_at = ?
+    WHERE id = ? AND revision = ?
+  `).run(updatedAt, courseId, expectedRevision);
+  if (changed.changes !== 1) throw new LearningRevisionConflictError("Course revision changed");
 }
 
 function requiredText(value: unknown, name: string, maximum: number): string {
@@ -157,6 +166,268 @@ function insertResearchRun(db: DatabaseHandle, courseId: string, dayId: string |
   const insertEvidence = db.prepare(`INSERT INTO research_claim_evidence (run_id, claim_id, source_id, stance) VALUES (?, ?, ?, ?)`);
   for (const claim of research.claims) { insertClaim.run(claim.id, runId, claim.statement, claim.major ? 1 : 0, claim.conclusion, claim.uncertainty); for (const evidence of claim.evidence) insertEvidence.run(runId, claim.id, evidence.sourceId, evidence.stance); }
   return runId;
+}
+
+function snapshotData(snapshot: LearningSnapshot): Omit<LearningSnapshot, "documents"> {
+  return {
+    course: snapshot.course,
+    days: snapshot.days,
+    currentDay: snapshot.currentDay,
+    researchRuns: snapshot.researchRuns,
+    understoodConcepts: snapshot.understoodConcepts,
+    remediationConcepts: snapshot.remediationConcepts,
+    quizAttempts: snapshot.quizAttempts,
+  };
+}
+
+export function recordDailyResearch(
+  db: DatabaseHandle,
+  dataRoot: string,
+  input: { courseId: string; expectedRevision: number; research: ResearchBundleInput },
+): LearningSnapshot {
+  if (typeof input !== "object" || input === null || Array.isArray(input) || !UUID_PATTERN.test(input.courseId)) {
+    throw new LearningValidationError("courseId is invalid");
+  }
+  validateResearchBundle(input.research);
+
+  const course = getCourse(db, input.courseId);
+  if (!course) throw new LearningStateError("Course does not exist");
+  assertRevision(course, input.expectedRevision);
+  if (course.status !== "active" || course.currentStage !== "lecture" || course.currentDayId === null) {
+    throw new LearningStateError("Daily research requires an active lecture with a current Day");
+  }
+  const existing = db.prepare(`
+    SELECT COUNT(*) AS count FROM research_runs WHERE day_id = ? AND scope = 'day'
+  `).get(course.currentDayId) as { count: number };
+  if (existing.count !== 0) throw new LearningStateError("Daily research already exists");
+
+  const snapshot = getLearningSnapshot(db, dataRoot, course.id)!;
+  const day = snapshot.currentDay!;
+  const now = new Date().toISOString();
+  const projected = {
+    ...snapshotData(snapshot),
+    course: { ...snapshot.course, revision: snapshot.course.revision + 1, updatedAt: now },
+  };
+  const update = prepareMarkdownUpdate(dataRoot, course.id, [
+    {
+      file: "current-day.md",
+      expectedSha256: course.currentDayMarkdownSha256,
+      content: renderCurrentDayMarkdown(day, input.research),
+    },
+    {
+      file: "progress.md",
+      expectedSha256: course.progressMarkdownSha256,
+      content: renderProgressMarkdown(projected, now),
+    },
+  ]);
+
+  commitPreparedUpdate(db, update, () => {
+    const latest = getCourse(db, course.id);
+    if (
+      !latest ||
+      latest.status !== "active" ||
+      latest.currentStage !== "lecture" ||
+      latest.currentDayId !== day.id
+    ) {
+      throw new LearningStateError("Daily research state changed");
+    }
+    assertRevision(latest, input.expectedRevision);
+    const duplicate = db.prepare(`
+      SELECT COUNT(*) AS count FROM research_runs WHERE day_id = ? AND scope = 'day'
+    `).get(day.id) as { count: number };
+    if (duplicate.count !== 0) throw new LearningStateError("Daily research already exists");
+
+    insertResearchRun(db, course.id, day.id, input.research, now);
+    db.prepare(`
+      UPDATE courses
+      SET current_day_markdown_sha256 = ?, progress_markdown_sha256 = ?
+      WHERE id = ?
+    `).run(
+      update.checksums["current-day.md"]!,
+      update.checksums["progress.md"]!,
+      course.id,
+    );
+    advanceRevision(db, course.id, input.expectedRevision, now);
+  });
+  return getLearningSnapshot(db, dataRoot, course.id)!;
+}
+
+const LESSON_PART_BY_FIELD = {
+  recallMarkdown: "recall",
+  preciseExplanationMarkdown: "precise",
+  eli5Markdown: "eli5",
+  analogyMarkdown: "analogy",
+  exampleMarkdown: "example",
+  applicationMarkdown: "application",
+  interviewMarkdown: "interview",
+} as const;
+
+const LESSON_FIELDS = new Set([...Object.keys(LESSON_PART_BY_FIELD), "remediationMarkdown"]);
+const CONCEPT_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+function validateLesson(value: unknown): Partial<LessonContentInput> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new LearningValidationError("lesson is required");
+  }
+  const entries = Object.entries(value);
+  if (entries.length === 0) throw new LearningValidationError("lesson must contain at least one field");
+  const result: Partial<LessonContentInput> = {};
+  for (const [field, markdown] of entries) {
+    if (!LESSON_FIELDS.has(field)) throw new LearningValidationError("lesson field is invalid");
+    (result as Record<string, string>)[field] = requiredText(markdown, field, 1_000_000);
+  }
+  return result;
+}
+
+function validateConcepts(value: unknown, name: string): ConceptInput[] {
+  if (!Array.isArray(value)) throw new LearningValidationError(`${name} must be an array`);
+  const keys = new Set<string>();
+  return value.map((concept, index) => {
+    if (typeof concept !== "object" || concept === null || Array.isArray(concept)) {
+      throw new LearningValidationError(`${name}[${index}] key is invalid or duplicated`);
+    }
+    const candidate = concept as Partial<ConceptInput>;
+    if (typeof candidate.key !== "string" || !CONCEPT_KEY_PATTERN.test(candidate.key) || keys.has(candidate.key)) {
+      throw new LearningValidationError(`${name}[${index}] key is invalid or duplicated`);
+    }
+    const normalized = {
+      key: candidate.key,
+      label: requiredText(candidate.label, `${name}[${index}] label`, 300),
+    };
+    if (/[\r\n]/.test(normalized.label)) throw new LearningValidationError("concept label must be single-line");
+    keys.add(normalized.key);
+    return normalized;
+  });
+}
+
+function assertDailyResearchRun(db: DatabaseHandle, dayId: string): void {
+  const research = db.prepare(`
+    SELECT COUNT(*) AS count FROM research_runs WHERE day_id = ? AND scope = 'day'
+  `).get(dayId) as { count: number };
+  if (research.count !== 1) {
+    throw new LearningStateError("Current Day must have exactly one daily research run");
+  }
+}
+
+export function saveLearningCheckpoint(
+  db: DatabaseHandle,
+  dataRoot: string,
+  input: {
+    courseId: string;
+    expectedRevision: number;
+    lesson: Partial<LessonContentInput>;
+    understoodConcepts?: readonly ConceptInput[];
+    remediationConcepts?: readonly ConceptInput[];
+  },
+): LearningSnapshot {
+  if (typeof input !== "object" || input === null || Array.isArray(input) || !UUID_PATTERN.test(input.courseId)) {
+    throw new LearningValidationError("courseId is invalid");
+  }
+  const lesson = validateLesson(input.lesson);
+  const course = getCourse(db, input.courseId);
+  if (!course) throw new LearningStateError("Course does not exist");
+  assertRevision(course, input.expectedRevision);
+  if (course.status !== "active" || course.currentDayId === null) {
+    throw new LearningStateError("Checkpoint requires an active current Day");
+  }
+
+  let understoodConcepts: ConceptInput[] | undefined;
+  let remediationConcepts: ConceptInput[] | undefined;
+  if (course.currentStage === "lecture") {
+    if (
+      lesson.remediationMarkdown !== undefined ||
+      input.understoodConcepts === undefined ||
+      input.remediationConcepts === undefined
+    ) {
+      throw new LearningValidationError("lecture checkpoint requires both concept arrays and no remediation");
+    }
+    understoodConcepts = validateConcepts(input.understoodConcepts, "understoodConcepts");
+    remediationConcepts = validateConcepts(input.remediationConcepts, "remediationConcepts");
+    const understoodKeys = new Set(understoodConcepts.map(({ key }) => key));
+    if (remediationConcepts.some(({ key }) => understoodKeys.has(key))) {
+      throw new LearningValidationError("concept cannot have two statuses");
+    }
+  } else if (course.currentStage === "remediation") {
+    if (
+      Object.keys(lesson).length !== 1 ||
+      lesson.remediationMarkdown === undefined ||
+      input.understoodConcepts !== undefined ||
+      input.remediationConcepts !== undefined
+    ) {
+      throw new LearningValidationError("remediation checkpoint accepts only remediationMarkdown and omits concept arrays");
+    }
+  } else {
+    throw new LearningStateError("Checkpoint is not allowed in this stage");
+  }
+
+  assertDailyResearchRun(db, course.currentDayId);
+  const snapshot = getLearningSnapshot(db, dataRoot, course.id)!;
+  const day = snapshot.currentDay!;
+  const now = new Date().toISOString();
+  const projected = {
+    ...snapshotData(snapshot),
+    course: { ...snapshot.course, revision: snapshot.course.revision + 1, updatedAt: now },
+    understoodConcepts: understoodConcepts ?? snapshot.understoodConcepts,
+    remediationConcepts: remediationConcepts ?? snapshot.remediationConcepts,
+  };
+  const update = prepareMarkdownUpdate(dataRoot, course.id, [
+    {
+      file: "current-day.md",
+      expectedSha256: course.currentDayMarkdownSha256,
+      content: appendCurrentDayCheckpoint(snapshot.documents.currentDay!, lesson, now),
+    },
+    {
+      file: "progress.md",
+      expectedSha256: course.progressMarkdownSha256,
+      content: renderProgressMarkdown(projected, now),
+    },
+  ]);
+
+  commitPreparedUpdate(db, update, () => {
+    const latest = getCourse(db, course.id);
+    if (
+      !latest ||
+      latest.status !== "active" ||
+      latest.currentStage !== course.currentStage ||
+      latest.currentDayId !== day.id
+    ) {
+      throw new LearningStateError("Checkpoint state changed");
+    }
+    assertRevision(latest, input.expectedRevision);
+    assertDailyResearchRun(db, day.id);
+    if (course.currentStage === "lecture") {
+      db.prepare("DELETE FROM day_concepts WHERE day_id = ?").run(day.id);
+      const insertConcept = db.prepare(`
+        INSERT INTO day_concepts (day_id, concept_key, label, status, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      for (const concept of understoodConcepts!) {
+        insertConcept.run(day.id, concept.key, concept.label, "understood", now);
+      }
+      for (const concept of remediationConcepts!) {
+        insertConcept.run(day.id, concept.key, concept.label, "remediation", now);
+      }
+      const savePart = db.prepare(`
+        INSERT INTO day_lesson_parts (day_id, part, saved_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(day_id, part) DO UPDATE SET saved_at = excluded.saved_at
+      `);
+      for (const [field, part] of Object.entries(LESSON_PART_BY_FIELD)) {
+        if (lesson[field as keyof LessonContentInput] !== undefined) savePart.run(day.id, part, now);
+      }
+    }
+    db.prepare(`
+      UPDATE courses
+      SET current_day_markdown_sha256 = ?, progress_markdown_sha256 = ?
+      WHERE id = ?
+    `).run(
+      update.checksums["current-day.md"]!,
+      update.checksums["progress.md"]!,
+      course.id,
+    );
+    advanceRevision(db, course.id, input.expectedRevision, now);
+  });
+  return getLearningSnapshot(db, dataRoot, course.id)!;
 }
 
 export function approveOutline(db: DatabaseHandle, dataRoot: string, input: ApproveOutlineInput): LearningSnapshot {
