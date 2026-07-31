@@ -246,11 +246,11 @@ function markdownUpdateRecord(update: PreparedMarkdownUpdate): UpdateRecord {
 }
 
 function discardUpdateRecord(update: PreparedMarkdownUpdate, record: UpdateRecord): void {
+  updates.delete(update);
   assertNoSymlinks(record.root, record.draftRoot);
   if (existsSync(record.draftRoot)) {
     rmSync(record.draftRoot, { recursive: true, force: true });
   }
-  updates.delete(update);
 }
 
 export function prepareMarkdownUpdate(
@@ -359,8 +359,13 @@ export function applyMarkdownUpdate(update: PreparedMarkdownUpdate): void {
   const installed: UpdateRecord["changes"][number][] = [];
   const backedUp: UpdateRecord["changes"][number][] = [];
   try {
+    assertNoSymlinks(record.root, record.draftRoot);
+    assertNoSymlinks(record.root, record.stagedRoot);
+    assertNoSymlinks(record.root, record.backupRoot);
     for (const change of record.changes) {
       assertNoSymlinks(record.root, change.target);
+      assertNoSymlinks(record.root, change.staged);
+      assertNoSymlinks(record.root, change.backup);
       if (change.expectedSha256 === null) {
         if (existsSync(change.target)) storageError("Markdown file already exists");
       } else {
@@ -393,8 +398,16 @@ export function rollbackMarkdownUpdate(update: PreparedMarkdownUpdate): void {
   const record = markdownUpdateRecord(update);
   try {
     if (record.state === "applied") {
-      for (const change of [...record.changes].reverse()) {
+      assertNoSymlinks(record.root, record.draftRoot);
+      assertNoSymlinks(record.root, record.backupRoot);
+      for (const change of record.changes) {
         assertNoSymlinks(record.root, change.target);
+        assertNoSymlinks(record.root, change.backup);
+        if (change.existed && !existsSync(change.backup)) {
+          storageError("Markdown update backup is missing");
+        }
+      }
+      for (const change of [...record.changes].reverse()) {
         if (change.content !== null && existsSync(change.target)) unlinkSync(change.target);
         if (change.existed && existsSync(change.backup)) {
           renameSync(change.backup, change.target);

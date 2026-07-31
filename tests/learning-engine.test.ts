@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -431,6 +432,116 @@ test("rejects symlinked, invalid, and duplicate update targets before staging", 
       { file: "progress.md", expectedSha256: null, content: "# one\n" },
       { file: "progress.md", expectedSha256: null, content: "# two\n" },
     ]), /duplicate Markdown filename/);
+    assert.deepEqual(listTemporaryEntries(dataRoot), []);
+  });
+});
+
+test("terminalizes a committed update when cleanup leaves symlinked residue", () => {
+  withDataRoot((dataRoot, db) => {
+    const course = createShell(db, dataRoot);
+    const update = prepareMarkdownUpdate(dataRoot, course.id, [{
+      file: "course.md",
+      expectedSha256: course.markdownSha256,
+      content: "# committed\n",
+    }]);
+    applyMarkdownUpdate(update);
+    const [draftName] = listTemporaryEntries(dataRoot);
+    const draftRoot = join(dataRoot, "tmp", draftName);
+    const outside = join(dataRoot, "outside.md");
+    writeFileSync(outside, "# outside\n", "utf8");
+    rmSync(draftRoot, { recursive: true, force: true });
+    symlinkSync(outside, draftRoot);
+
+    completeMarkdownUpdate(update);
+
+    assert.equal(readFileSync(join(dataRoot, course.markdownPath), "utf8"), "# committed\n");
+    assert.throws(() => listTemporaryEntries(dataRoot), /symbolic link/);
+    assert.equal(getHealth(db, dataRoot).storage, "error");
+    assert.throws(() => rollbackMarkdownUpdate(update), /Invalid Markdown update/);
+    assert.equal(readFileSync(join(dataRoot, course.markdownPath), "utf8"), "# committed\n");
+  });
+});
+
+test("rejects a symlinked rollback draft before touching update targets", () => {
+  withDataRoot((dataRoot, db) => {
+    const course = createShell(db, dataRoot);
+    const original = readFileSync(join(dataRoot, course.markdownPath), "utf8");
+    const update = prepareMarkdownUpdate(dataRoot, course.id, [{
+      file: "course.md",
+      expectedSha256: course.markdownSha256,
+      content: "# replacement\n",
+    }]);
+    applyMarkdownUpdate(update);
+    const [draftName] = listTemporaryEntries(dataRoot);
+    const draftRoot = join(dataRoot, "tmp", draftName);
+    const preservedDraftRoot = join(dataRoot, "tmp", `${draftName}-preserved`);
+    const outside = join(dataRoot, "outside.md");
+    writeFileSync(outside, "# outside\n", "utf8");
+    renameSync(draftRoot, preservedDraftRoot);
+    symlinkSync(outside, draftRoot);
+
+    assert.throws(() => rollbackMarkdownUpdate(update), /symbolic link/);
+
+    assert.equal(readFileSync(join(dataRoot, course.markdownPath), "utf8"), "# replacement\n");
+    assert.throws(() => listTemporaryEntries(dataRoot), /symbolic link/);
+    assert.equal(getHealth(db, dataRoot).storage, "error");
+    unlinkSync(draftRoot);
+    renameSync(preservedDraftRoot, draftRoot);
+    rollbackMarkdownUpdate(update);
+    assert.equal(readFileSync(join(dataRoot, course.markdownPath), "utf8"), original);
+    assert.deepEqual(listTemporaryEntries(dataRoot), []);
+  });
+});
+
+test("rejects a symlinked rollback backup before touching update targets", () => {
+  withDataRoot((dataRoot, db) => {
+    const course = createShell(db, dataRoot);
+    const original = readFileSync(join(dataRoot, course.markdownPath), "utf8");
+    const update = prepareMarkdownUpdate(dataRoot, course.id, [{
+      file: "course.md",
+      expectedSha256: course.markdownSha256,
+      content: "# replacement\n",
+    }]);
+    applyMarkdownUpdate(update);
+    const [draftName] = listTemporaryEntries(dataRoot);
+    const backup = join(dataRoot, "tmp", draftName, "backup", "course.md");
+    const preservedBackup = `${backup}.preserved`;
+    const outside = join(dataRoot, "outside.md");
+    writeFileSync(outside, "# outside\n", "utf8");
+    renameSync(backup, preservedBackup);
+    symlinkSync(outside, backup);
+
+    assert.throws(() => rollbackMarkdownUpdate(update), /symbolic link/);
+
+    assert.equal(readFileSync(join(dataRoot, course.markdownPath), "utf8"), "# replacement\n");
+    unlinkSync(backup);
+    renameSync(preservedBackup, backup);
+    rollbackMarkdownUpdate(update);
+    assert.equal(readFileSync(join(dataRoot, course.markdownPath), "utf8"), original);
+  });
+});
+
+test("rejects a missing rollback backup before touching update targets", () => {
+  withDataRoot((dataRoot, db) => {
+    const course = createShell(db, dataRoot);
+    const original = readFileSync(join(dataRoot, course.markdownPath), "utf8");
+    const update = prepareMarkdownUpdate(dataRoot, course.id, [{
+      file: "course.md",
+      expectedSha256: course.markdownSha256,
+      content: "# replacement\n",
+    }]);
+    applyMarkdownUpdate(update);
+    const [draftName] = listTemporaryEntries(dataRoot);
+    const backup = join(dataRoot, "tmp", draftName, "backup", "course.md");
+    const preservedBackup = `${backup}.preserved`;
+    renameSync(backup, preservedBackup);
+
+    assert.throws(() => rollbackMarkdownUpdate(update), /Markdown update backup is missing/);
+
+    assert.equal(readFileSync(join(dataRoot, course.markdownPath), "utf8"), "# replacement\n");
+    renameSync(preservedBackup, backup);
+    rollbackMarkdownUpdate(update);
+    assert.equal(readFileSync(join(dataRoot, course.markdownPath), "utf8"), original);
     assert.deepEqual(listTemporaryEntries(dataRoot), []);
   });
 });
