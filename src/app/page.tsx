@@ -3,13 +3,27 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link.js";
 
 import { listCourses } from "../server/courses.ts";
-import { getRuntime, requireDatabase } from "../server/runtime.ts";
+import { getRuntime } from "../server/runtime.ts";
 import { CourseForm } from "./course-form.tsx";
 
 export const dynamic = "force-dynamic";
 
 export default function HomePage() {
-  const courses = listCourses(requireDatabase(getRuntime()));
+  const runtime = getRuntime();
+  if (!runtime.db) {
+    return (
+      <>
+        <h1>과정을 불러올 수 없습니다.</h1>
+        <p className="lead">
+          데이터베이스를 사용할 수 없습니다.{" "}
+          <Link href="/status">플랫폼 상태</Link>에서 점검 결과와 조치 방법을
+          확인해 주세요.
+        </p>
+      </>
+    );
+  }
+
+  const courses = listCourses(runtime.db);
 
   return (
     <>

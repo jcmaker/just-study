@@ -1152,6 +1152,7 @@ test("courses POST returns 201 then 200 for an idempotent replay", async () => {
     const first = await createCourseRoute(
       new Request("http://127.0.0.1/api/courses", {
         method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify(input),
       }),
     );
@@ -1159,6 +1160,7 @@ test("courses POST returns 201 then 200 for an idempotent replay", async () => {
     const replay = await createCourseRoute(
       new Request("http://127.0.0.1/api/courses", {
         method: "POST",
+        headers: { "content-type": "application/json; charset=utf-8" },
         body: JSON.stringify(input),
       }),
     );
@@ -1175,6 +1177,66 @@ test("courses POST returns 201 then 200 for an idempotent replay", async () => {
   }
 });
 
+test("courses POST rejects text/plain without mutating storage", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const response = await createCourseRoute(
+      new Request("http://127.0.0.1/api/courses", {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: JSON.stringify({
+          requestId: "90000000-0000-4000-8000-000000000020",
+          title: "Wrong media type",
+          goal: "JSON이 아닌 요청은 저장하지 않는다.",
+        }),
+      }),
+    );
+
+    assert.equal(response.status, 415);
+    assert.equal(listCourses(db).length, 0);
+    assert.deepEqual(listCourseDirectoryIds(dataRoot), []);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("courses POST rejects cross-site JSON without mutating storage", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const response = await createCourseRoute(
+      new Request("http://127.0.0.1/api/courses", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://attacker.example",
+          "sec-fetch-site": "cross-site",
+        },
+        body: JSON.stringify({
+          requestId: "90000000-0000-4000-8000-000000000021",
+          title: "Cross-site request",
+          goal: "교차 사이트 요청은 저장하지 않는다.",
+        }),
+      }),
+    );
+
+    assert.equal(response.status, 403);
+    assert.equal(listCourses(db).length, 0);
+    assert.deepEqual(listCourseDirectoryIds(dataRoot), []);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("courses POST returns 400 for validation failure", async () => {
   const dataRoot = makeDataRoot();
   const db = openDatabase(dataRoot);
@@ -1184,6 +1246,7 @@ test("courses POST returns 400 for validation failure", async () => {
     const response = await createCourseRoute(
       new Request("http://127.0.0.1/api/courses", {
         method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           requestId: "not-a-uuid",
           title: "",
@@ -1211,6 +1274,7 @@ test("courses POST returns 400 for malformed JSON", async () => {
     const response = await createCourseRoute(
       new Request("http://127.0.0.1/api/courses", {
         method: "POST",
+        headers: { "content-type": "application/json" },
         body: "{broken",
       }),
     );
@@ -1232,6 +1296,7 @@ test("courses POST returns safe 503 when the database is unavailable", async () 
     const response = await createCourseRoute(
       new Request("http://127.0.0.1/api/courses", {
         method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           requestId: "90000000-0000-4000-8000-000000000004",
           title: "Unavailable",
@@ -1259,6 +1324,7 @@ test("courses POST returns safe 500 for storage failure", async () => {
     const response = await createCourseRoute(
       new Request("http://127.0.0.1/api/courses", {
         method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           requestId: "90000000-0000-4000-8000-000000000005",
           title: "Storage failure",
@@ -1506,6 +1572,24 @@ test("UI root renders an empty state and then a saved course link", async () => 
     assert.match(listHtml, new RegExp(`href="/courses/${created.course.id}"`));
   } finally {
     db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("UI root renders safe recovery guidance when the database is unavailable", async () => {
+  const { default: HomePage } = await import("../src/app/page.tsx");
+  const dataRoot = makeDataRoot();
+  setTestRuntime(dataRoot, null);
+
+  try {
+    const html = renderToStaticMarkup(createElement(HomePage));
+    assert.match(html, /데이터베이스|저장소|상태/);
+    assert.match(html, /href="\/status"/);
+    assert.equal(html.includes("<form"), false);
+    assert.equal(html.includes("새 과정"), false);
+    assertSafeBody(html, dataRoot);
+  } finally {
     clearTestRuntime();
     rmSync(dataRoot, { recursive: true, force: true });
   }

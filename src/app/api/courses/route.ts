@@ -32,6 +32,29 @@ export function GET(): NextResponse {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
+  const mediaType = request.headers
+    .get("content-type")
+    ?.split(";", 1)[0]
+    ?.trim()
+    .toLowerCase();
+  if (mediaType !== "application/json") {
+    return NextResponse.json(
+      { error: "Content-Type은 application/json이어야 합니다." },
+      { status: 415 },
+    );
+  }
+
+  const origin = request.headers.get("origin");
+  if (
+    request.headers.get("sec-fetch-site")?.toLowerCase() === "cross-site" ||
+    (origin !== null && origin !== new URL(request.url).origin)
+  ) {
+    return NextResponse.json(
+      { error: "교차 사이트 요청은 허용되지 않습니다." },
+      { status: 403 },
+    );
+  }
+
   try {
     const input = (await request.json()) as CreateCourseInput;
     const runtime = getRuntime();
