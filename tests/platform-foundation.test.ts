@@ -10,11 +10,15 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
 import Database from "better-sqlite3";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import ts from "typescript";
 
 import { GET as getCourseRoute } from "../src/app/api/courses/[id]/route.ts";
 import {
@@ -42,6 +46,28 @@ import {
   probeStorageWritable,
   readVerifiedMarkdown,
 } from "../src/server/storage.ts";
+
+registerHooks({
+  load(url, context, nextLoad) {
+    if (url.endsWith(".css")) {
+      return { format: "module", shortCircuit: true, source: "" };
+    }
+    if (url.endsWith(".tsx")) {
+      return {
+        format: "module",
+        shortCircuit: true,
+        source: ts.transpileModule(readFileSync(new URL(url), "utf8"), {
+          compilerOptions: {
+            jsx: ts.JsxEmit.ReactJSX,
+            module: ts.ModuleKind.ESNext,
+            target: ts.ScriptTarget.ES2022,
+          },
+        }).outputText,
+      };
+    }
+    return nextLoad(url, context);
+  },
+});
 
 function makeDataRoot(): string {
   return mkdtempSync(join(tmpdir(), "just-study-"));
@@ -1309,6 +1335,310 @@ test("course detail GET returns safe 500 for corrupt Markdown", async () => {
     assert.equal(response.status, 500);
     assert.match(body.error, /읽|복구|다시/);
     assertSafeBody(body, dataRoot);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("UI layout renders Korean language and semantic navigation", async () => {
+  const { default: RootLayout } = await import("../src/app/layout.tsx");
+  const html = renderToStaticMarkup(
+    createElement(
+      RootLayout,
+      null,
+      createElement("p", null, "본문"),
+    ),
+  );
+
+  assert.match(html, /^<html lang="ko">/);
+  assert.match(html, /<nav aria-label="주요 메뉴">/);
+  assert.match(html, /href="\/">과정<\/a>/);
+  assert.match(html, /href="\/status">상태<\/a>/);
+  assert.match(html, /<main>.*본문.*<\/main>/);
+});
+
+function makeCourseFormData(
+  requestId: string,
+  title: string,
+  goal: string,
+): FormData {
+  const formData = new FormData();
+  formData.set("requestId", requestId);
+  formData.set("title", title);
+  formData.set("goal", goal);
+  return formData;
+}
+
+test("UI form renders labels, limits, alert, and pending state", async () => {
+  const { CourseFormView } = await import("../src/app/course-form.tsx");
+  const html = renderToStaticMarkup(
+    createElement(CourseFormView, {
+      action: "/",
+      pending: true,
+      requestId: "90000000-0000-4000-8000-000000000010",
+      state: { error: "과정 제목은 줄바꿈 없이 1~120자여야 합니다." },
+    }),
+  );
+
+  assert.match(html, /과정 이름/);
+  assert.match(html, /name="title"/);
+  assert.match(html, /minLength="1"/);
+  assert.match(html, /maxLength="120"/);
+  assert.match(html, /30일 뒤 학습 목표/);
+  assert.match(html, /name="goal"/);
+  assert.match(html, /maxLength="2000"/);
+  assert.match(html, /required=""/);
+  assert.match(html, /role="alert"/);
+  assert.match(html, /disabled=""/);
+  assert.match(html, /생성 중…/);
+});
+
+test("UI action keeps title and goal validation field-specific", async () => {
+  const { createCourseAction } = await import("../src/app/actions.ts");
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const title = await createCourseAction(
+      { error: null },
+      makeCourseFormData(
+        "90000000-0000-4000-8000-000000000011",
+        "첫 줄\n둘째 줄",
+        "목표",
+      ),
+    );
+    const goal = await createCourseAction(
+      { error: null },
+      makeCourseFormData(
+        "90000000-0000-4000-8000-000000000012",
+        "과정",
+        "g".repeat(2_001),
+      ),
+    );
+
+    assert.match(title.error ?? "", /과정 제목.*1~120자/);
+    assert.match(goal.error ?? "", /학습 목표.*2,000자/);
+    assert.equal(listCourses(db).length, 0);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("UI action returns safe status guidance when storage fails", async () => {
+  const { createCourseAction } = await import("../src/app/actions.ts");
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  writeFileSync(join(dataRoot, "courses"), `private path: ${dataRoot}`, "utf8");
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const state = await createCourseAction(
+      { error: null },
+      makeCourseFormData(
+        "90000000-0000-4000-8000-000000000013",
+        "저장 실패",
+        "안전한 안내를 확인한다.",
+      ),
+    );
+
+    assert.match(state.error ?? "", /저장.*\/status.*다시/);
+    assert.equal((state.error ?? "").includes(dataRoot), false);
+    assert.equal(listCourses(db).length, 0);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("UI action redirects only after the course is persisted", async () => {
+  const { createCourseAction } = await import("../src/app/actions.ts");
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+
+  try {
+    await assert.rejects(
+      () =>
+        createCourseAction(
+          { error: null },
+          makeCourseFormData(
+            "90000000-0000-4000-8000-000000000014",
+            "저장 뒤 이동",
+            "저장된 뒤에만 상세 화면으로 이동한다.",
+          ),
+        ),
+      (error) =>
+        error instanceof Error &&
+        "digest" in error &&
+        String(error.digest).startsWith("NEXT_REDIRECT;"),
+    );
+    assert.equal(listCourses(db).length, 1);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("UI root renders an empty state and then a saved course link", async () => {
+  const { default: HomePage } = await import("../src/app/page.tsx");
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const emptyHtml = renderToStaticMarkup(createElement(HomePage));
+    assert.match(emptyHtml, /아직 저장된 과정이 없습니다/);
+
+    const created = createCourse(db, dataRoot, {
+      requestId: "90000000-0000-4000-8000-000000000015",
+      title: "웹 서비스 기초",
+      goal: "요청과 응답을 설명한다.",
+    });
+    const listHtml = renderToStaticMarkup(createElement(HomePage));
+    assert.match(listHtml, /웹 서비스 기초/);
+    assert.match(listHtml, new RegExp(`href="/courses/${created.course.id}"`));
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("UI detail renders exact title and verified Markdown as text", async () => {
+  const { default: CoursePage } = await import(
+    "../src/app/courses/[id]/page.tsx"
+  );
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const created = createCourse(db, dataRoot, {
+    requestId: "90000000-0000-4000-8000-000000000016",
+    title: "<웹> & API",
+    goal: "요청 > 응답을 그대로 설명한다.",
+  });
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const html = renderToStaticMarkup(
+      await CoursePage({ params: Promise.resolve({ id: created.course.id }) }),
+    );
+    assert.match(html, /<h1>&lt;웹&gt; &amp; API<\/h1>/);
+    assert.match(html, /# \\&lt;웹\\&gt; \\&amp; API/);
+    assert.match(html, /요청 \\&gt; 응답을 그대로 설명한다\\\./);
+    assert.equal(html.includes("<script>"), false);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("UI missing page gives a Korean recovery path", async () => {
+  const { default: NotFound } = await import("../src/app/not-found.tsx");
+  const html = renderToStaticMarkup(createElement(NotFound));
+
+  assert.match(html, /과정을 찾을 수 없습니다/);
+  assert.match(html, /href="\/">과정 목록으로 돌아가기<\/a>/);
+});
+
+test("UI status explains healthy and recovery-needed states with all counts", async () => {
+  const { default: StatusPage } = await import("../src/app/status/page.tsx");
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const healthy = renderToStaticMarkup(createElement(StatusPage));
+    assert.match(healthy, /정상/);
+    assert.match(healthy, /시스템이 정상입니다/);
+    for (const label of [
+      "데이터베이스",
+      "스키마",
+      "저장소",
+      "고아 과정",
+      "누락 과정",
+      "손상 과정",
+      "임시 항목",
+    ]) {
+      assert.match(healthy, new RegExp(label));
+    }
+
+    const corrupt = createCourse(db, dataRoot, {
+      requestId: "90000000-0000-4000-8000-000000000018",
+      title: "손상 상태",
+      goal: "손상 개수를 확인한다.",
+    });
+    const missing = createCourse(db, dataRoot, {
+      requestId: "90000000-0000-4000-8000-000000000019",
+      title: "누락 상태",
+      goal: "누락 개수를 확인한다.",
+    });
+    writeFileSync(
+      join(dataRoot, corrupt.course.markdownPath),
+      "# changed\n",
+      "utf8",
+    );
+    rmSync(join(dataRoot, "courses", missing.course.id), {
+      recursive: true,
+      force: true,
+    });
+    mkdirSync(
+      join(dataRoot, "courses", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+    );
+    mkdirSync(join(dataRoot, "tmp", "recovery-entry"));
+
+    const inconsistent = renderToStaticMarkup(createElement(StatusPage));
+    assert.match(inconsistent, /확인 필요/);
+    assert.match(inconsistent, /저장 데이터가 일치하지 않습니다/);
+    for (const label of ["고아 과정", "누락 과정", "손상 과정", "임시 항목"]) {
+      assert.match(inconsistent, new RegExp(`<dt>${label}</dt><dd>1개</dd>`));
+    }
+
+    db.close();
+    setTestRuntime(dataRoot, null);
+    const unhealthy = renderToStaticMarkup(createElement(StatusPage));
+    assert.match(unhealthy, /확인 필요/);
+    assert.match(unhealthy, /데이터베이스 파일, 스키마 및 권한을 확인/);
+    assert.match(unhealthy, /조치 방법/);
+  } finally {
+    if (db.open) db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("UI detail renders safe recovery guidance for checksum damage", async () => {
+  const { default: CoursePage } = await import(
+    "../src/app/courses/[id]/page.tsx"
+  );
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const created = createCourse(db, dataRoot, {
+    requestId: "90000000-0000-4000-8000-000000000017",
+    title: "손상된 과정",
+    goal: "손상 화면을 확인한다.",
+  });
+  writeFileSync(
+    join(dataRoot, created.course.markdownPath),
+    `# private ${dataRoot}\n`,
+    "utf8",
+  );
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const html = renderToStaticMarkup(
+      await CoursePage({ params: Promise.resolve({ id: created.course.id }) }),
+    );
+    assert.match(html, /과정 데이터를 확인할 수 없습니다/);
+    assert.match(html, /href="\/status">상태에서 복구 방법 확인하기<\/a>/);
+    assert.equal(html.includes(dataRoot), false);
+    assert.equal(html.includes("손상된 과정"), false);
   } finally {
     db.close();
     clearTestRuntime();
