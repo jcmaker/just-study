@@ -58,7 +58,7 @@ contract.
 
 ## Current scope
 
-This phase includes course shell creation, listing, reading, health checks,
-atomic Markdown writes, and restart persistence. Research, the 30-Day learning
-engine, MCP, PDF files, schedules, login, Docker, and multi-user support are
+This phase includes single-user local course creation, the 30-Day learning
+engine, SQLite/Markdown restart persistence, and health checks. MCP, PDF
+files, schedules, login, Docker, dashboards, and multi-user support are
 separate phases.

@@ -969,6 +969,123 @@ test("rejects invalid research inputs without side effects", async (t) => {
   }
 });
 
+test("research trims accepted fields and rejects overlength outer whitespace without side effects", async (t) => {
+  const padding = " ".repeat(50_000);
+  const cases: [string, (input: ApproveOutlineInput) => void][] = [
+    ["question", (input) => { input.research.questions = [`${padding}핵심 질문`]; }],
+    ["criterion", (input) => { input.research.topicCriteria = [`${padding}선정 조건`]; }],
+    ["source URL", (input) => { input.research.sources[0]!.url = `${padding}https://cs.example.edu/foundations`; }],
+    ["source title", (input) => { input.research.sources[0]!.title = `${padding}Computer Science Foundations`; }],
+    ["selection reason", (input) => { input.research.sources[0]!.selectionReason = `${padding}대학의 공개 기초 과정이다.`; }],
+    ["claim", (input) => { input.research.claims[0]!.statement = `${padding}추상화와 문제 분해가 이후 주제의 공통 기반이다.`; }],
+  ];
+
+  for (const [name, mutate] of cases) {
+    await t.test(`rejects padded ${name}`, () => withDataRoot((dataRoot, db) => {
+      const shell = createShell(db, dataRoot);
+      const original = readFileSync(join(dataRoot, shell.markdownPath), "utf8");
+      const input = validApproval(shell.id);
+      mutate(input);
+      assert.throws(() => approveOutline(db, dataRoot, input), LearningValidationError);
+      const after = getLearningSnapshot(db, dataRoot, shell.id)!;
+      assert.equal(after.course.revision, 0);
+      assert.equal(after.course.status, "draft");
+      assert.equal((db.prepare("SELECT COUNT(*) AS count FROM research_runs").get() as { count: number }).count, 0);
+      assert.equal(readFileSync(join(dataRoot, shell.markdownPath), "utf8"), original);
+    }));
+  }
+
+  await t.test("persists and renders accepted padded values in normalized form", () => withDataRoot((dataRoot, db) => {
+    const shell = createShell(db, dataRoot);
+    const approval = validApproval(shell.id);
+    const courseQuestion = approval.research.questions[0]!;
+    const courseCriterion = approval.research.topicCriteria[0]!;
+    const courseNarrative = approval.research.narrativeMarkdown;
+    const courseSource = approval.research.sources[0]!;
+    const courseClaim = approval.research.claims[0]!;
+    approval.research = {
+      ...approval.research,
+      questions: approval.research.questions.map((value) => `  ${value}  `),
+      topicCriteria: approval.research.topicCriteria.map((value) => `  ${value}  `),
+      narrativeMarkdown: `  ${courseNarrative}  `,
+      sources: approval.research.sources.map((source) => ({
+        ...source,
+        url: `  ${source.url}  `,
+        title: `  ${source.title}  `,
+        publisher: `  ${source.publisher}  `,
+        independenceKey: `  ${source.independenceKey}  `,
+        selectionReason: source.selectionReason === null ? null : `  ${source.selectionReason}  `,
+        limitation: source.id === courseSource.id ? "  보완 범위를 기록한다.  " : source.limitation,
+      })),
+      claims: approval.research.claims.map((claim) => ({
+        ...claim,
+        statement: `  ${claim.statement}  `,
+        conclusion: `  ${claim.conclusion}  `,
+        uncertainty: "  추가 예제로 확인한다.  ",
+      })),
+    };
+    let snapshot = approveOutline(db, dataRoot, approval);
+    const courseRun = snapshot.researchRuns[0]!;
+    assert.equal(courseRun.questions[0], courseQuestion);
+    assert.equal(courseRun.topicCriteria[0], courseCriterion);
+    assert.equal(courseRun.sources[0]!.url, courseSource.url);
+    assert.equal(courseRun.sources[0]!.title, courseSource.title);
+    assert.equal(courseRun.sources[0]!.publisher, courseSource.publisher);
+    assert.equal(courseRun.sources[0]!.independenceKey, courseSource.independenceKey);
+    assert.equal(courseRun.sources[0]!.selectionReason, courseSource.selectionReason);
+    assert.equal(courseRun.sources[0]!.limitation, "보완 범위를 기록한다.");
+    assert.equal(courseRun.claims[0]!.statement, courseClaim.statement);
+    assert.equal(courseRun.claims[0]!.conclusion, courseClaim.conclusion);
+    assert.equal(courseRun.claims[0]!.uncertainty, "추가 예제로 확인한다.");
+    assert.match(snapshot.documents.course, new RegExp(`\\| 1 \\| 예 \\| ${courseSource.title} \\| ${courseSource.url} \\|`));
+    assert.match(snapshot.documents.course, new RegExp(courseNarrative));
+
+    const daily = dailyResearch(1);
+    const dailyQuestion = daily.questions[0]!;
+    const dailyCriterion = daily.topicCriteria[0]!;
+    const dailyNarrative = daily.narrativeMarkdown;
+    const dailySource = daily.sources[0]!;
+    const dailyClaim = daily.claims[0]!;
+    daily.questions = daily.questions.map((value) => `  ${value}  `);
+    daily.topicCriteria = daily.topicCriteria.map((value) => `  ${value}  `);
+    daily.narrativeMarkdown = `  ${daily.narrativeMarkdown}  `;
+    daily.sources = daily.sources.map((source) => ({
+      ...source,
+      url: `  ${source.url}  `,
+      title: `  ${source.title}  `,
+      publisher: `  ${source.publisher}  `,
+      independenceKey: `  ${source.independenceKey}  `,
+      selectionReason: source.selectionReason === null ? null : `  ${source.selectionReason}  `,
+      limitation: source.id === dailySource.id ? "  보완 범위를 기록한다.  " : source.limitation,
+    }));
+    daily.claims = daily.claims.map((claim) => ({
+      ...claim,
+      statement: `  ${claim.statement}  `,
+      conclusion: `  ${claim.conclusion}  `,
+      uncertainty: "  추가 예제로 확인한다.  ",
+    }));
+    snapshot = recordDailyResearch(db, dataRoot, {
+      courseId: snapshot.course.id,
+      expectedRevision: snapshot.course.revision,
+      research: daily,
+    });
+    const dailyRun = snapshot.researchRuns.find(({ scope }) => scope === "day")!;
+    assert.equal(dailyRun.questions[0], dailyQuestion);
+    assert.equal(dailyRun.topicCriteria[0], dailyCriterion);
+    assert.equal(dailyRun.sources[0]!.url, dailySource.url);
+    assert.equal(dailyRun.sources[0]!.title, dailySource.title);
+    assert.equal(dailyRun.sources[0]!.publisher, dailySource.publisher);
+    assert.equal(dailyRun.sources[0]!.independenceKey, dailySource.independenceKey);
+    assert.equal(dailyRun.sources[0]!.selectionReason, dailySource.selectionReason);
+    assert.equal(dailyRun.sources[0]!.limitation, "보완 범위를 기록한다.");
+    assert.equal(dailyRun.claims[0]!.statement, dailyClaim.statement);
+    assert.equal(dailyRun.claims[0]!.conclusion, dailyClaim.conclusion);
+    assert.equal(dailyRun.claims[0]!.uncertainty, "추가 예제로 확인한다.");
+    assert.match(snapshot.documents.currentDay!, new RegExp(`\\| 1 \\| 예 \\| ${dailySource.title} \\| ${dailySource.url} \\|`));
+    assert.match(snapshot.documents.currentDay!, new RegExp(dailyNarrative));
+  }));
+});
+
 test("approval commit failure restores the draft course and all files", () => {
   withDataRoot((dataRoot, db) => {
     const shell = createShell(db, dataRoot);
