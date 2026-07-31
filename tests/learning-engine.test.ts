@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,6 +21,14 @@ import {
   type DatabaseHandle,
 } from "../src/server/database.ts";
 import { getHealth } from "../src/server/health.ts";
+import {
+  applyMarkdownUpdate,
+  completeMarkdownUpdate,
+  listTemporaryEntries,
+  prepareMarkdownUpdate,
+  readVerifiedMarkdown,
+  rollbackMarkdownUpdate,
+} from "../src/server/storage.ts";
 
 function withDataRoot(run: (dataRoot: string, db: DatabaseHandle) => void): void {
   const dataRoot = mkdtempSync(join(tmpdir(), "just-study-learning-"));
@@ -230,5 +245,192 @@ test("health validates learning-document registrations by lifecycle status", () 
 
     db.prepare("UPDATE courses SET status = 'completed' WHERE id = ?").run(course.id);
     assert.deepEqual(getHealth(db, dataRoot).corruptCourseIds, [course.id]);
+  });
+});
+
+test("stages and applies a verified multi-file Markdown update", () => {
+  withDataRoot((dataRoot, db) => {
+    const course = createShell(db, dataRoot);
+    const update = prepareMarkdownUpdate(dataRoot, course.id, [
+      {
+        file: "course.md",
+        expectedSha256: course.markdownSha256,
+        content: "# 승인된 과정\n",
+      },
+      {
+        file: "progress.md",
+        expectedSha256: null,
+        content: "# 진도\n",
+      },
+      {
+        file: "journal.md",
+        expectedSha256: null,
+        content: "# 학습 기록\n",
+      },
+      {
+        file: "current-day.md",
+        expectedSha256: null,
+        content: "# Day 1\n",
+      },
+    ]);
+    applyMarkdownUpdate(update);
+    completeMarkdownUpdate(update);
+
+    assert.equal(
+      readVerifiedMarkdown(dataRoot, `courses/${course.id}/course.md`, update.checksums["course.md"]!),
+      "# 승인된 과정\n",
+    );
+    assert.equal(readFileSync(join(dataRoot, "courses", course.id, "progress.md"), "utf8"), "# 진도\n");
+    assert.equal(readFileSync(join(dataRoot, "courses", course.id, "journal.md"), "utf8"), "# 학습 기록\n");
+    assert.equal(readFileSync(join(dataRoot, "courses", course.id, "current-day.md"), "utf8"), "# Day 1\n");
+    assert.deepEqual(listTemporaryEntries(dataRoot), []);
+  });
+});
+
+test("rolls every applied Markdown file back to its verified content", () => {
+  withDataRoot((dataRoot, db) => {
+    const course = createShell(db, dataRoot);
+    const original = readFileSync(join(dataRoot, course.markdownPath), "utf8");
+    const update = prepareMarkdownUpdate(dataRoot, course.id, [
+      {
+        file: "course.md",
+        expectedSha256: course.markdownSha256,
+        content: "# replacement\n",
+      },
+      {
+        file: "progress.md",
+        expectedSha256: null,
+        content: "# progress\n",
+      },
+    ]);
+    applyMarkdownUpdate(update);
+    rollbackMarkdownUpdate(update);
+
+    assert.equal(readFileSync(join(dataRoot, course.markdownPath), "utf8"), original);
+    assert.throws(
+      () => readFileSync(join(dataRoot, "courses", course.id, "progress.md"), "utf8"),
+      { code: "ENOENT" },
+    );
+    assert.deepEqual(listTemporaryEntries(dataRoot), []);
+  });
+});
+
+test("rejects stale checksums before touching any course file", () => {
+  withDataRoot((dataRoot, db) => {
+    const course = createShell(db, dataRoot);
+    const original = readFileSync(join(dataRoot, course.markdownPath), "utf8");
+    assert.throws(() =>
+      prepareMarkdownUpdate(dataRoot, course.id, [{
+        file: "course.md",
+        expectedSha256: "0".repeat(64),
+        content: "# must not write\n",
+      }]),
+    );
+    assert.equal(readFileSync(join(dataRoot, course.markdownPath), "utf8"), original);
+    assert.deepEqual(listTemporaryEntries(dataRoot), []);
+  });
+});
+
+test("deletes current-day Markdown only after an applied update", () => {
+  withDataRoot((dataRoot, db) => {
+    const course = createShell(db, dataRoot);
+    const create = prepareMarkdownUpdate(dataRoot, course.id, [{
+      file: "current-day.md",
+      expectedSha256: null,
+      content: "# Day 30\n",
+    }]);
+    applyMarkdownUpdate(create);
+    completeMarkdownUpdate(create);
+    const remove = prepareMarkdownUpdate(dataRoot, course.id, [{
+      file: "current-day.md",
+      expectedSha256: create.checksums["current-day.md"]!,
+      content: null,
+    }]);
+    applyMarkdownUpdate(remove);
+    completeMarkdownUpdate(remove);
+    assert.throws(
+      () => readFileSync(join(dataRoot, "courses", course.id, "current-day.md"), "utf8"),
+      { code: "ENOENT" },
+    );
+  });
+});
+
+test("restores all files when SQLite COMMIT fails after apply", () => {
+  withDataRoot((dataRoot, db) => {
+    const course = createShell(db, dataRoot);
+    const original = readFileSync(join(dataRoot, course.markdownPath), "utf8");
+    db.exec(`
+      CREATE TABLE learning_commit_parent (id INTEGER PRIMARY KEY);
+      CREATE TABLE learning_commit_gate (
+        course_id TEXT NOT NULL,
+        missing_parent INTEGER NOT NULL,
+        FOREIGN KEY (missing_parent) REFERENCES learning_commit_parent(id)
+          DEFERRABLE INITIALLY DEFERRED
+      );
+      CREATE TRIGGER fail_learning_commit
+      AFTER UPDATE OF revision ON courses
+      BEGIN
+        INSERT INTO learning_commit_gate (course_id, missing_parent)
+        VALUES (NEW.id, 1);
+      END;
+    `);
+    const update = prepareMarkdownUpdate(dataRoot, course.id, [
+      {
+        file: "course.md",
+        expectedSha256: course.markdownSha256,
+        content: "# replacement\n",
+      },
+      {
+        file: "progress.md",
+        expectedSha256: null,
+        content: "# progress\n",
+      },
+    ]);
+
+    assert.throws(() => db.transaction(() => {
+      applyMarkdownUpdate(update);
+      db.prepare("UPDATE courses SET revision = revision + 1 WHERE id = ?")
+        .run(course.id);
+    })(), /FOREIGN KEY constraint failed/);
+    rollbackMarkdownUpdate(update);
+
+    assert.equal(readFileSync(join(dataRoot, course.markdownPath), "utf8"), original);
+    assert.equal(
+      (db.prepare("SELECT revision FROM courses WHERE id = ?").get(course.id) as {
+        revision: number;
+      }).revision,
+      0,
+    );
+    assert.throws(
+      () => readFileSync(join(dataRoot, "courses", course.id, "progress.md"), "utf8"),
+      { code: "ENOENT" },
+    );
+    assert.deepEqual(listTemporaryEntries(dataRoot), []);
+  });
+});
+
+test("rejects symlinked, invalid, and duplicate update targets before staging", () => {
+  withDataRoot((dataRoot, db) => {
+    const course = createShell(db, dataRoot);
+    const outside = join(dataRoot, "outside.md");
+    writeFileSync(outside, "# outside\n", "utf8");
+    unlinkSync(join(dataRoot, course.markdownPath));
+    symlinkSync(outside, join(dataRoot, course.markdownPath));
+
+    assert.throws(() => prepareMarkdownUpdate(dataRoot, course.id, [{
+      file: "course.md",
+      expectedSha256: course.markdownSha256,
+      content: "# replacement\n",
+    }]), /symbolic link/);
+    assert.throws(() => prepareMarkdownUpdate(dataRoot, "../outside", [{
+      file: "progress.md",
+      expectedSha256: null,
+      content: "# progress\n",
+    }]), /Invalid course ID/);
+    assert.throws(() => prepareMarkdownUpdate(dataRoot, course.id, [
+      { file: "progress.md", expectedSha256: null, content: "# one\n" },
+      { file: "progress.md", expectedSha256: null, content: "# two\n" },
+    ]), /duplicate Markdown filename/);
+    assert.deepEqual(listTemporaryEntries(dataRoot), []);
   });
 });

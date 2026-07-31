@@ -20,15 +20,60 @@ export type CourseDraft = {
   sha256: string;
 };
 
+export type CourseMarkdownFile =
+  | "course.md"
+  | "progress.md"
+  | "journal.md"
+  | "current-day.md";
+
+export type CourseMarkdownChange = {
+  file: CourseMarkdownFile;
+  expectedSha256: string | null;
+  content: string | null;
+};
+
+export type PreparedMarkdownUpdate = {
+  checksums: Partial<Record<CourseMarkdownFile, string | null>>;
+};
+
 type DraftRecord = CourseDraft & {
   root: string;
   finalMarkdownInTempPath: string;
 };
 
+type UpdateState = "prepared" | "applied";
+
+type UpdateRecord = {
+  root: string;
+  draftRoot: string;
+  stagedRoot: string;
+  backupRoot: string;
+  courseDirectory: string;
+  changes: readonly {
+    file: CourseMarkdownFile;
+    target: string;
+    staged: string;
+    backup: string;
+    relativePath: string;
+    expectedSha256: string | null;
+    existed: boolean;
+    content: string | null;
+  }[];
+  checksums: Partial<Record<CourseMarkdownFile, string | null>>;
+  state: UpdateState;
+};
+
 class StorageError extends Error {}
 
 const drafts = new WeakMap<CourseDraft, DraftRecord>();
+const updates = new WeakMap<PreparedMarkdownUpdate, UpdateRecord>();
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const COURSE_MARKDOWN_FILES = new Set<CourseMarkdownFile>([
+  "course.md",
+  "progress.md",
+  "journal.md",
+  "current-day.md",
+]);
 
 function storageError(message: string): never {
   throw new StorageError(message);
@@ -191,6 +236,184 @@ export function discardCourseDraft(draft: CourseDraft): void {
     drafts.delete(draft);
   } catch (error) {
     rethrowStorageError(error, "Storage draft cleanup failed");
+  }
+}
+
+function markdownUpdateRecord(update: PreparedMarkdownUpdate): UpdateRecord {
+  const record = updates.get(update);
+  if (!record) storageError("Invalid Markdown update");
+  return record;
+}
+
+function discardUpdateRecord(update: PreparedMarkdownUpdate, record: UpdateRecord): void {
+  assertNoSymlinks(record.root, record.draftRoot);
+  if (existsSync(record.draftRoot)) {
+    rmSync(record.draftRoot, { recursive: true, force: true });
+  }
+  updates.delete(update);
+}
+
+export function prepareMarkdownUpdate(
+  dataRoot: string,
+  courseId: string,
+  changes: readonly CourseMarkdownChange[],
+): PreparedMarkdownUpdate {
+  if (!UUID_V4.test(courseId)) storageError("Invalid course ID");
+  if (!Array.isArray(changes) || changes.length === 0) {
+    storageError("Markdown changes are required");
+  }
+  const names = new Set<CourseMarkdownFile>();
+  for (const change of changes as readonly CourseMarkdownChange[]) {
+    if (!COURSE_MARKDOWN_FILES.has(change.file)) storageError("Invalid Markdown filename");
+    if (names.has(change.file)) storageError("duplicate Markdown filename");
+    if (
+      change.expectedSha256 !== null &&
+      !/^[0-9a-f]{64}$/i.test(change.expectedSha256)
+    ) storageError("Invalid expected checksum");
+    if (change.content !== null && typeof change.content !== "string") {
+      storageError("Invalid Markdown content");
+    }
+    if (change.content === null && change.expectedSha256 === null) {
+      storageError("Cannot delete a missing Markdown file");
+    }
+    names.add(change.file);
+  }
+
+  let draftRoot: string | undefined;
+  try {
+    const { root, temporaryRoot } = storagePaths(dataRoot);
+    const courseDirectory = resolveInsideDataRoot(root, `courses/${courseId}`);
+    assertNoSymlinks(root, courseDirectory);
+    const courseStat = lstatIfExists(courseDirectory);
+    if (!courseStat?.isDirectory()) storageError("Course directory is missing");
+
+    draftRoot = resolveInsideDataRoot(root, `tmp/update-${courseId}-${randomUUID()}`);
+    const stagedRoot = resolveInsideDataRoot(root, `${relative(root, draftRoot)}/staged`);
+    const backupRoot = resolveInsideDataRoot(root, `${relative(root, draftRoot)}/backup`);
+    assertNoSymlinks(root, temporaryRoot);
+    mkdirSync(stagedRoot, { recursive: true });
+    mkdirSync(backupRoot);
+
+    const checksums: Partial<Record<CourseMarkdownFile, string | null>> = {};
+    const records = (changes as readonly CourseMarkdownChange[]).map((change) => {
+      const relativePath = `courses/${courseId}/${change.file}`;
+      const target = resolveInsideDataRoot(root, relativePath);
+      const staged = resolveInsideDataRoot(root, `${relative(root, stagedRoot)}/${change.file}`);
+      const backup = resolveInsideDataRoot(root, `${relative(root, backupRoot)}/${change.file}`);
+      assertNoSymlinks(root, target);
+      const existed = lstatIfExists(target) !== undefined;
+      if (change.expectedSha256 === null) {
+        if (existed) storageError("Markdown file already exists");
+      } else {
+        readVerifiedMarkdown(dataRoot, relativePath, change.expectedSha256);
+      }
+      if (change.content !== null) {
+        const temporary = `${staged}.tmp`;
+        writeFileSync(temporary, change.content, { encoding: "utf8", flag: "wx" });
+        renameSync(temporary, staged);
+        checksums[change.file] = sha256(change.content);
+      } else {
+        checksums[change.file] = null;
+      }
+      return {
+        file: change.file,
+        target,
+        staged,
+        backup,
+        relativePath,
+        expectedSha256: change.expectedSha256,
+        existed,
+        content: change.content,
+      };
+    });
+
+    const update: PreparedMarkdownUpdate = { checksums };
+    updates.set(update, {
+      root,
+      draftRoot,
+      stagedRoot,
+      backupRoot,
+      courseDirectory,
+      changes: records,
+      checksums,
+      state: "prepared",
+    });
+    return update;
+  } catch (error) {
+    if (draftRoot) {
+      try {
+        const root = resolve(dataRoot);
+        assertNoSymlinks(root, draftRoot);
+        if (existsSync(draftRoot)) rmSync(draftRoot, { recursive: true, force: true });
+      } catch {
+        // Keep the original preparation failure.
+      }
+    }
+    return rethrowStorageError(error, "Markdown update preparation failed");
+  }
+}
+
+export function applyMarkdownUpdate(update: PreparedMarkdownUpdate): void {
+  const record = markdownUpdateRecord(update);
+  if (record.state !== "prepared") storageError("Markdown update is not prepared");
+  const installed: UpdateRecord["changes"][number][] = [];
+  const backedUp: UpdateRecord["changes"][number][] = [];
+  try {
+    for (const change of record.changes) {
+      assertNoSymlinks(record.root, change.target);
+      if (change.expectedSha256 === null) {
+        if (existsSync(change.target)) storageError("Markdown file already exists");
+      } else {
+        readVerifiedMarkdown(record.root, change.relativePath, change.expectedSha256);
+      }
+    }
+    for (const change of record.changes) {
+      if (change.existed) {
+        renameSync(change.target, change.backup);
+        backedUp.push(change);
+      }
+      if (change.content !== null) {
+        renameSync(change.staged, change.target);
+        installed.push(change);
+      }
+    }
+    record.state = "applied";
+  } catch (error) {
+    for (const change of installed.reverse()) {
+      if (existsSync(change.target)) unlinkSync(change.target);
+    }
+    for (const change of backedUp.reverse()) {
+      if (existsSync(change.backup)) renameSync(change.backup, change.target);
+    }
+    rethrowStorageError(error, "Markdown update apply failed");
+  }
+}
+
+export function rollbackMarkdownUpdate(update: PreparedMarkdownUpdate): void {
+  const record = markdownUpdateRecord(update);
+  try {
+    if (record.state === "applied") {
+      for (const change of [...record.changes].reverse()) {
+        assertNoSymlinks(record.root, change.target);
+        if (change.content !== null && existsSync(change.target)) unlinkSync(change.target);
+        if (change.existed && existsSync(change.backup)) {
+          renameSync(change.backup, change.target);
+        }
+      }
+    }
+    discardUpdateRecord(update, record);
+  } catch (error) {
+    rethrowStorageError(error, "Markdown update rollback failed");
+  }
+}
+
+export function completeMarkdownUpdate(update: PreparedMarkdownUpdate): void {
+  const record = markdownUpdateRecord(update);
+  if (record.state !== "applied") storageError("Markdown update is not applied");
+  try {
+    discardUpdateRecord(update, record);
+  } catch {
+    // The DB and final files are committed; health reports this recovery residue.
   }
 }
 
