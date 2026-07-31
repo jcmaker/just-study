@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -15,6 +16,14 @@ import test from "node:test";
 
 import Database from "better-sqlite3";
 
+import {
+  CourseValidationError,
+  type CreateCourseInput,
+  createCourse,
+  getCourse,
+  getCourseDocument,
+  listCourses,
+} from "../src/server/courses.ts";
 import { openDatabase, SCHEMA_VERSION } from "../src/server/database.ts";
 import {
   discardCourseDraft,
@@ -323,6 +332,347 @@ test("probes writable storage without leaving a temporary entry", () => {
     probeStorageWritable(dataRoot);
     assert.deepEqual(listTemporaryEntries(dataRoot), []);
   } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("creates one SQLite row and one Markdown document", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+
+  try {
+    const result = createCourse(db, dataRoot, {
+      requestId: "11111111-1111-4111-8111-111111111111",
+      title: "  TypeScript 기초  ",
+      goal: "  작은 프로그램을 직접 만든다.  ",
+    });
+    const document = getCourseDocument(db, dataRoot, result.course.id);
+
+    assert.equal(result.created, true);
+    assert.equal(listCourses(db).length, 1);
+    assert.equal(document?.course.title, "TypeScript 기초");
+    assert.equal(document?.course.goal, "작은 프로그램을 직접 만든다.");
+    assert.equal(
+      document?.markdown,
+      "# TypeScript 기초\n\n## 학습 목표\n\n> 작은 프로그램을 직접 만든다\\.\n",
+    );
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("uses request ID as the idempotency identity even when repeated payload differs", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const requestId = "22222222-2222-4222-8222-222222222222";
+
+  try {
+    const first = createCourse(db, dataRoot, {
+      requestId,
+      title: "SQLite",
+      goal: "트랜잭션을 이해한다.",
+    });
+    const second = createCourse(db, dataRoot, {
+      requestId,
+      title: "Changed title",
+      goal: "Changed goal",
+    });
+
+    assert.equal(first.course.id, second.course.id);
+    assert.equal(second.created, false);
+    assert.equal(second.course.title, "SQLite");
+    assert.equal(second.course.goal, "트랜잭션을 이해한다.");
+    assert.equal(listCourses(db).length, 1);
+    assert.deepEqual(listCourseDirectoryIds(dataRoot), [first.course.id]);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("escapes user Markdown while preserving the fixed document structure", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+
+  try {
+    const created = createCourse(db, dataRoot, {
+      requestId: "33333333-3333-4333-8333-333333333333",
+      title: "<!-- # heading -->",
+      goal: '# heading\n> quote\n<!-- comment -->\n<script>alert("x")</script>',
+    });
+
+    assert.equal(
+      getCourseDocument(db, dataRoot, created.course.id)?.markdown,
+      "# \\<\\!\\-\\- \\# heading \\-\\-\\>\n\n" +
+        "## 학습 목표\n\n" +
+        "> \\# heading\n" +
+        "> \\> quote\n" +
+        "> \\<\\!\\-\\- comment \\-\\-\\>\n" +
+        '> \\<script\\>alert\\(\\"x\\"\\)\\<\\/script\\>\n',
+    );
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("accepts exact minimum and maximum trimmed course input boundaries", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+
+  try {
+    const minimum = createCourse(db, dataRoot, {
+      requestId: "44444444-4444-4444-8444-444444444444",
+      title: " x ",
+      goal: " y ",
+    });
+    const maximum = createCourse(db, dataRoot, {
+      requestId: "55555555-5555-4555-8555-555555555555",
+      title: ` ${"t".repeat(120)} `,
+      goal: ` ${"g".repeat(2_000)} `,
+    });
+
+    assert.equal(minimum.course.title.length, 1);
+    assert.equal(minimum.course.goal.length, 1);
+    assert.equal(maximum.course.title.length, 120);
+    assert.equal(maximum.course.goal.length, 2_000);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("rejects empty, over-limit, and multiline course input boundaries", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const invalidInputs: CreateCourseInput[] = [
+    {
+      requestId: "61111111-1111-4111-8111-111111111111",
+      title: "   ",
+      goal: "goal",
+    },
+    {
+      requestId: "62222222-2222-4222-8222-222222222222",
+      title: "title",
+      goal: "   ",
+    },
+    {
+      requestId: "63333333-3333-4333-8333-333333333333",
+      title: "t".repeat(121),
+      goal: "goal",
+    },
+    {
+      requestId: "64444444-4444-4444-8444-444444444444",
+      title: "title",
+      goal: "g".repeat(2_001),
+    },
+    {
+      requestId: "65555555-5555-4555-8555-555555555555",
+      title: "line one\nline two",
+      goal: "goal",
+    },
+    {
+      requestId: "66666666-6666-4666-8666-666666666666",
+      title: "line one\rline two",
+      goal: "goal",
+    },
+  ];
+
+  try {
+    for (const input of invalidInputs) {
+      assert.throws(() => createCourse(db, dataRoot, input), CourseValidationError);
+    }
+    assert.equal(listCourses(db).length, 0);
+    assert.equal(existsSync(join(dataRoot, "courses")), false);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("rejects runtime-invalid values and malformed UUIDs before storage access", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const invalidInputs = [
+    null,
+    {
+      requestId: "77777777-7777-4777-8777-777777777777",
+      title: null,
+      goal: "goal",
+    },
+    {
+      requestId: "77777777-7777-4777-8777-777777777777",
+      title: "title",
+      goal: [],
+    },
+    { requestId: "not-a-uuid", title: "title", goal: "goal" },
+    {
+      requestId: "77777777-7777-0777-8777-777777777777",
+      title: "title",
+      goal: "goal",
+    },
+    {
+      requestId: "77777777-7777-4777-7777-777777777777",
+      title: "title",
+      goal: "goal",
+    },
+  ] as unknown as CreateCourseInput[];
+
+  try {
+    for (const input of invalidInputs) {
+      assert.throws(() => createCourse(db, dataRoot, input), CourseValidationError);
+    }
+    assert.equal(listCourses(db).length, 0);
+    assert.equal(existsSync(join(dataRoot, "courses")), false);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("rolls back the database when the actual Markdown write fails", { concurrency: false }, () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  mkdirSync(join(dataRoot, "courses"));
+  mkdirSync(join(dataRoot, "tmp"));
+
+  try {
+    const originalUmask = process.umask(0o222);
+    try {
+      assert.throws(
+        () =>
+          createCourse(db, dataRoot, {
+            requestId: "81111111-1111-4111-8111-111111111111",
+            title: "Write failure",
+            goal: "실제 파일 쓰기 실패를 확인한다.",
+          }),
+        /Storage preparation failed/,
+      );
+    } finally {
+      process.umask(originalUmask);
+    }
+
+    assert.equal(listCourses(db).length, 0);
+    assert.deepEqual(listTemporaryEntries(dataRoot), []);
+    assert.deepEqual(listCourseDirectoryIds(dataRoot), []);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("rolls back the database and draft when the actual final directory rename fails", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const coursesRoot = join(dataRoot, "courses");
+  mkdirSync(coursesRoot);
+  mkdirSync(join(dataRoot, "tmp"));
+
+  try {
+    chmodSync(coursesRoot, 0o500);
+    try {
+      assert.throws(
+        () =>
+          createCourse(db, dataRoot, {
+            requestId: "82222222-2222-4222-8222-222222222222",
+            title: "Rename failure",
+            goal: "실제 최종 이동 실패를 확인한다.",
+          }),
+        /Storage finalization failed/,
+      );
+    } finally {
+      chmodSync(coursesRoot, 0o700);
+    }
+
+    assert.equal(listCourses(db).length, 0);
+    assert.deepEqual(listTemporaryEntries(dataRoot), []);
+    assert.deepEqual(listCourseDirectoryIds(dataRoot), []);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("preserves a finalized orphan and the original error when SQLite COMMIT fails", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  db.exec(`
+    CREATE TABLE course_commit_parent (id INTEGER PRIMARY KEY);
+    CREATE TABLE course_commit_gate (
+      course_id TEXT NOT NULL,
+      missing_parent INTEGER NOT NULL,
+      FOREIGN KEY (missing_parent) REFERENCES course_commit_parent(id)
+        DEFERRABLE INITIALLY DEFERRED
+    );
+    CREATE TRIGGER fail_course_commit
+    AFTER INSERT ON courses
+    BEGIN
+      INSERT INTO course_commit_gate (course_id, missing_parent) VALUES (NEW.id, 1);
+    END;
+  `);
+
+  try {
+    let failure: unknown;
+    try {
+      createCourse(db, dataRoot, {
+        requestId: "83333333-3333-4333-8333-333333333333",
+        title: "Commit failure",
+        goal: "커밋 실패 뒤 orphan을 확인한다.",
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.match((failure as Error)?.message ?? "", /FOREIGN KEY constraint failed/);
+    assert.equal(listCourses(db).length, 0);
+    assert.equal(listCourseDirectoryIds(dataRoot).length, 1);
+    assert.deepEqual(listTemporaryEntries(dataRoot), []);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("reopens the database and verifies the persisted Markdown checksum", () => {
+  const dataRoot = makeDataRoot();
+  let db = openDatabase(dataRoot);
+
+  try {
+    const created = createCourse(db, dataRoot, {
+      requestId: "84444444-4444-4444-8444-444444444444",
+      title: "Persistence",
+      goal: "재시작 뒤 과정과 체크섬을 읽는다.",
+    });
+    db.close();
+    db = openDatabase(dataRoot);
+
+    const document = getCourseDocument(db, dataRoot, created.course.id);
+    assert.equal(document?.course.title, "Persistence");
+    assert.equal(
+      document?.markdown,
+      "# Persistence\n\n## 학습 목표\n\n> 재시작 뒤 과정과 체크섬을 읽는다\\.\n",
+    );
+    assert.equal(
+      createHash("sha256").update(document?.markdown ?? "", "utf8").digest("hex"),
+      document?.course.markdownSha256,
+    );
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("returns null for a missing course and document", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const missingId = "99999999-9999-4999-8999-999999999999";
+
+  try {
+    assert.equal(getCourse(db, missingId), null);
+    assert.equal(getCourseDocument(db, dataRoot, missingId), null);
+  } finally {
+    db.close();
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
