@@ -35,6 +35,7 @@ export function getHealth(
   let schemaVersion: number | null = null;
   let courses: StoredCourse[] = [];
   let courseDirectoryIds: string[] = [];
+  let courseInventoryComplete = false;
   let temporaryEntries: string[] = [];
 
   if (db) {
@@ -61,6 +62,12 @@ export function getHealth(
 
   try {
     courseDirectoryIds = listCourseDirectoryIds(dataRoot);
+    courseInventoryComplete = true;
+  } catch {
+    storage = "error";
+  }
+
+  try {
     temporaryEntries = listTemporaryEntries(dataRoot);
   } catch {
     storage = "error";
@@ -68,18 +75,20 @@ export function getHealth(
 
   const known = new Set(courses.map(({ id }) => id));
   const stored = new Set(courseDirectoryIds);
+  const canInspectCourses = database === "ok" && courseInventoryComplete;
   const orphanCourseIds =
-    database === "ok"
+    canInspectCourses
       ? courseDirectoryIds.filter((id) => !known.has(id))
       : [];
   const missingCourseIds =
-    database === "ok"
+    canInspectCourses
       ? courses.map(({ id }) => id).filter((id) => !stored.has(id))
       : [];
   const corruptCourseIds =
-    database === "ok"
+    canInspectCourses
       ? courses
           .filter(({ id, markdown_path, markdown_sha256 }) => {
+            if (!stored.has(id)) return false;
             if (markdown_path !== `courses/${id}/course.md`) return true;
             try {
               readVerifiedMarkdown(dataRoot, markdown_path, markdown_sha256);

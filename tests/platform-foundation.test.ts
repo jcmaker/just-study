@@ -776,6 +776,39 @@ test("reports a course directory missing from SQLite as an orphan", () => {
   }
 });
 
+test("does not accuse courses when course directory inventory fails", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+
+  try {
+    const created = createCourse(db, dataRoot, {
+      requestId: "56666666-6666-4666-8666-666666666666",
+      title: "Inventory failure",
+      goal: "과정 목록 검사 실패를 안전하게 보고한다.",
+    });
+    symlinkSync(
+      join(dataRoot, "courses", created.course.id),
+      join(dataRoot, "courses", "unrelated"),
+    );
+    writeFileSync(join(dataRoot, "tmp", "unfinished"), "partial", "utf8");
+    assert.throws(
+      () => listCourseDirectoryIds(dataRoot),
+      /symbolic link/,
+    );
+
+    const health = getHealth(db, dataRoot);
+    assert.equal(health.ok, false);
+    assert.equal(health.storage, "error");
+    assert.deepEqual(health.orphanCourseIds, []);
+    assert.deepEqual(health.missingCourseIds, []);
+    assert.deepEqual(health.corruptCourseIds, []);
+    assert.deepEqual(health.temporaryEntries, ["unfinished"]);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("reports a SQLite course missing its directory", () => {
   const dataRoot = makeDataRoot();
   const db = openDatabase(dataRoot);
@@ -794,7 +827,7 @@ test("reports a SQLite course missing its directory", () => {
     const health = getHealth(db, dataRoot);
     assert.equal(health.ok, false);
     assert.deepEqual(health.missingCourseIds, [created.course.id]);
-    assert.deepEqual(health.corruptCourseIds, [created.course.id]);
+    assert.deepEqual(health.corruptCourseIds, []);
     assert.match(health.message, /복구/);
   } finally {
     db.close();
