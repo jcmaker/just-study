@@ -22,8 +22,15 @@ export type HealthReport = {
 
 type StoredCourse = {
   id: string;
+  status: "draft" | "active" | "completed";
   markdown_path: string;
   markdown_sha256: string;
+  progress_markdown_path: string | null;
+  progress_markdown_sha256: string | null;
+  journal_markdown_path: string | null;
+  journal_markdown_sha256: string | null;
+  current_day_markdown_path: string | null;
+  current_day_markdown_sha256: string | null;
 };
 
 export function getHealth(
@@ -44,7 +51,12 @@ export function getHealth(
       schemaVersion = db.pragma("user_version", { simple: true }) as number;
       courses = db
         .prepare(
-          "SELECT id, markdown_path, markdown_sha256 FROM courses ORDER BY id",
+          `SELECT
+            id, status, markdown_path, markdown_sha256,
+            progress_markdown_path, progress_markdown_sha256,
+            journal_markdown_path, journal_markdown_sha256,
+            current_day_markdown_path, current_day_markdown_sha256
+          FROM courses ORDER BY id`,
         )
         .all() as StoredCourse[];
     } catch {
@@ -87,15 +99,60 @@ export function getHealth(
   const corruptCourseIds =
     canInspectCourses
       ? courses
-          .filter(({ id, markdown_path, markdown_sha256 }) => {
+          .filter(({
+            id,
+            status,
+            markdown_path,
+            markdown_sha256,
+            progress_markdown_path,
+            progress_markdown_sha256,
+            journal_markdown_path,
+            journal_markdown_sha256,
+            current_day_markdown_path,
+            current_day_markdown_sha256,
+          }) => {
             if (!stored.has(id)) return false;
-            if (markdown_path !== `courses/${id}/course.md`) return true;
-            try {
-              readVerifiedMarkdown(dataRoot, markdown_path, markdown_sha256);
-              return false;
-            } catch {
-              return true;
-            }
+            if (
+              (status === "draft" && [
+                progress_markdown_path,
+                progress_markdown_sha256,
+                journal_markdown_path,
+                journal_markdown_sha256,
+                current_day_markdown_path,
+                current_day_markdown_sha256,
+              ].some((value) => value !== null)) ||
+              (status === "completed" && (
+                current_day_markdown_path !== null ||
+                current_day_markdown_sha256 !== null
+              ))
+            ) return true;
+
+            const registeredDocuments = [
+              [`courses/${id}/course.md`, markdown_path, markdown_sha256],
+              ...(status === "draft"
+                ? []
+                : [
+                    [`courses/${id}/progress.md`, progress_markdown_path, progress_markdown_sha256],
+                    [`courses/${id}/journal.md`, journal_markdown_path, journal_markdown_sha256],
+                  ]),
+              ...(status === "active"
+                ? [[
+                    `courses/${id}/current-day.md`,
+                    current_day_markdown_path,
+                    current_day_markdown_sha256,
+                  ]]
+                : []),
+            ] as const;
+
+            return registeredDocuments.some(([expectedPath, path, checksum]) => {
+              if (path === null || checksum === null || path !== expectedPath) return true;
+              try {
+                readVerifiedMarkdown(dataRoot, path, checksum);
+                return false;
+              } catch {
+                return true;
+              }
+            });
           })
           .map(({ id }) => id)
       : [];

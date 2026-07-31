@@ -8,13 +8,31 @@ import {
   readVerifiedMarkdown,
 } from "./storage.ts";
 
+export type CourseStatus = "draft" | "active" | "completed";
+export type LearningStage = "lecture" | "quiz" | "remediation" | "reflection";
+export type LearningPreference = "examples" | "theory" | "practice";
+
 export type Course = {
   id: string;
   requestId: string;
   title: string;
   goal: string;
+  status: CourseStatus;
+  priorKnowledge: string | null;
+  learningPreference: LearningPreference | null;
+  currentDayId: string | null;
+  currentStage: LearningStage | null;
+  revision: number;
   markdownPath: string;
   markdownSha256: string;
+  progressMarkdownPath: string | null;
+  progressMarkdownSha256: string | null;
+  journalMarkdownPath: string | null;
+  journalMarkdownSha256: string | null;
+  currentDayMarkdownPath: string | null;
+  currentDayMarkdownSha256: string | null;
+  outlineApprovedAt: string | null;
+  completedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -35,13 +53,27 @@ type CourseRow = {
   request_id: string;
   title: string;
   goal: string;
+  status: CourseStatus;
+  prior_knowledge: string | null;
+  learning_preference: LearningPreference | null;
+  current_day_id: string | null;
+  current_stage: LearningStage | null;
+  revision: number;
   markdown_path: string;
   markdown_sha256: string;
+  progress_markdown_path: string | null;
+  progress_markdown_sha256: string | null;
+  journal_markdown_path: string | null;
+  journal_markdown_sha256: string | null;
+  current_day_markdown_path: string | null;
+  current_day_markdown_sha256: string | null;
+  outline_approved_at: string | null;
+  completed_at: string | null;
   created_at: string;
   updated_at: string;
 };
 
-const UUID_PATTERN =
+export const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MARKDOWN_PUNCTUATION = /[!-/:-@[-`{-~]/g;
 
@@ -53,8 +85,22 @@ function rowToCourse(row: CourseRow): Course {
     requestId: row.request_id,
     title: row.title,
     goal: row.goal,
+    status: row.status,
+    priorKnowledge: row.prior_knowledge,
+    learningPreference: row.learning_preference,
+    currentDayId: row.current_day_id,
+    currentStage: row.current_stage,
+    revision: row.revision,
     markdownPath: row.markdown_path,
     markdownSha256: row.markdown_sha256,
+    progressMarkdownPath: row.progress_markdown_path,
+    progressMarkdownSha256: row.progress_markdown_sha256,
+    journalMarkdownPath: row.journal_markdown_path,
+    journalMarkdownSha256: row.journal_markdown_sha256,
+    currentDayMarkdownPath: row.current_day_markdown_path,
+    currentDayMarkdownSha256: row.current_day_markdown_sha256,
+    outlineApprovedAt: row.outline_approved_at,
+    completedAt: row.completed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

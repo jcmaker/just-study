@@ -107,7 +107,7 @@ test("rejects a newer schema without changing its database", () => {
   const seeded = new Database(path);
 
   try {
-    seeded.pragma("user_version = 2");
+    seeded.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
     seeded.pragma("journal_mode = DELETE");
   } finally {
     seeded.close();
@@ -116,12 +116,12 @@ test("rejects a newer schema without changing its database", () => {
   try {
     assert.throws(
       () => openDatabase(dataRoot),
-      /Database schema 2 is newer than supported 1/,
+      new RegExp(`Database schema ${SCHEMA_VERSION + 1} is newer than supported ${SCHEMA_VERSION}`),
     );
 
     const db = new Database(path);
     try {
-      assert.equal(db.pragma("user_version", { simple: true }), 2);
+      assert.equal(db.pragma("user_version", { simple: true }), SCHEMA_VERSION + 1);
       assert.equal(db.pragma("journal_mode", { simple: true }), "delete");
       assert.equal(coursesTable(db), undefined);
     } finally {
