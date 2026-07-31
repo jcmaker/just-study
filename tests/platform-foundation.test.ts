@@ -11,11 +11,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import Database from "better-sqlite3";
 
+import { GET as getCourseRoute } from "../src/app/api/courses/[id]/route.ts";
+import {
+  GET as listCoursesRoute,
+  POST as createCourseRoute,
+} from "../src/app/api/courses/route.ts";
+import { GET as getHealthRoute } from "../src/app/api/health/route.ts";
 import {
   CourseValidationError,
   type CreateCourseInput,
@@ -25,6 +31,8 @@ import {
   listCourses,
 } from "../src/server/courses.ts";
 import { openDatabase, SCHEMA_VERSION } from "../src/server/database.ts";
+import { getHealth } from "../src/server/health.ts";
+import { getRuntime, requireDatabase } from "../src/server/runtime.ts";
 import {
   discardCourseDraft,
   finalizeCourseFiles,
@@ -726,6 +734,551 @@ test("returns null for a missing course and document", () => {
     assert.equal(getCourseDocument(db, dataRoot, missingId), null);
   } finally {
     db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("reports a healthy database and writable storage", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+
+  try {
+    const health = getHealth(db, dataRoot);
+    assert.equal(health.ok, true);
+    assert.equal(health.database, "ok");
+    assert.equal(health.storage, "ok");
+    assert.equal(health.schemaVersion, SCHEMA_VERSION);
+    assert.deepEqual(health.orphanCourseIds, []);
+    assert.deepEqual(health.missingCourseIds, []);
+    assert.deepEqual(health.corruptCourseIds, []);
+    assert.match(health.message, /정상/);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("reports a course directory missing from SQLite as an orphan", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const orphanId = "55555555-5555-4555-8555-555555555555";
+  const draft = prepareCourseFiles(dataRoot, orphanId, "# Orphan\n");
+  finalizeCourseFiles(draft);
+
+  try {
+    const health = getHealth(db, dataRoot);
+    assert.equal(health.ok, false);
+    assert.deepEqual(health.orphanCourseIds, [orphanId]);
+    assert.match(health.message, /복구/);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("reports a SQLite course missing its directory", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+
+  try {
+    const created = createCourse(db, dataRoot, {
+      requestId: "77777777-7777-4777-8777-777777777777",
+      title: "Missing files",
+      goal: "누락된 과정 폴더를 감지한다.",
+    });
+    rmSync(join(dataRoot, "courses", created.course.id), {
+      recursive: true,
+      force: true,
+    });
+
+    const health = getHealth(db, dataRoot);
+    assert.equal(health.ok, false);
+    assert.deepEqual(health.missingCourseIds, [created.course.id]);
+    assert.deepEqual(health.corruptCourseIds, [created.course.id]);
+    assert.match(health.message, /복구/);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("reports tampered course Markdown as corrupt", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+
+  try {
+    const created = createCourse(db, dataRoot, {
+      requestId: "78888888-8888-4888-8888-888888888888",
+      title: "Checksum",
+      goal: "변조된 과정 문서를 감지한다.",
+    });
+    writeFileSync(join(dataRoot, created.course.markdownPath), "# Tampered\n", "utf8");
+
+    const health = getHealth(db, dataRoot);
+    assert.equal(health.ok, false);
+    assert.deepEqual(health.corruptCourseIds, [created.course.id]);
+    assert.match(health.message, /복구/);
+    assert.equal(health.message.includes(dataRoot), false);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("reports a course whose database row points at the wrong Markdown path", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+
+  try {
+    const created = createCourse(db, dataRoot, {
+      requestId: "79999999-9999-4999-8999-999999999999",
+      title: "Path check",
+      goal: "과정 문서 경로 연결을 검증한다.",
+    });
+    const originalPath = join(dataRoot, created.course.markdownPath);
+    const wrongRelativePath = `courses/${created.course.id}/other.md`;
+    writeFileSync(
+      join(dataRoot, wrongRelativePath),
+      readFileSync(originalPath, "utf8"),
+      "utf8",
+    );
+    db.prepare("UPDATE courses SET markdown_path = ? WHERE id = ?").run(
+      wrongRelativePath,
+      created.course.id,
+    );
+
+    const health = getHealth(db, dataRoot);
+    assert.equal(health.ok, false);
+    assert.deepEqual(health.corruptCourseIds, [created.course.id]);
+    assert.match(health.message, /복구/);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("reports schema and temporary-entry recovery states", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+
+  try {
+    db.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
+    mkdirSync(join(dataRoot, "tmp"), { recursive: true });
+    writeFileSync(join(dataRoot, "tmp", "unfinished"), "partial", "utf8");
+
+    const health = getHealth(db, dataRoot);
+    assert.equal(health.ok, false);
+    assert.equal(health.schemaVersion, SCHEMA_VERSION + 1);
+    assert.deepEqual(health.temporaryEntries, ["unfinished"]);
+    assert.match(health.message, /데이터베이스|스키마/);
+  } finally {
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("reports database startup failure while still checking storage", () => {
+  const dataRoot = makeDataRoot();
+
+  try {
+    const health = getHealth(null, dataRoot);
+    assert.equal(health.ok, false);
+    assert.equal(health.database, "error");
+    assert.equal(health.storage, "ok");
+    assert.equal(health.schemaVersion, null);
+    assert.match(health.message, /데이터베이스|스키마|권한/);
+    assert.equal(health.message.includes(dataRoot), false);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("reports storage failure with safe permission guidance", () => {
+  const parentRoot = makeDataRoot();
+  const dataRoot = join(parentRoot, "not-a-directory");
+  writeFileSync(dataRoot, "blocked", "utf8");
+
+  try {
+    const health = getHealth(null, dataRoot);
+    assert.equal(health.ok, false);
+    assert.equal(health.database, "error");
+    assert.equal(health.storage, "error");
+    assert.match(health.message, /저장소|권한/);
+    assert.equal(health.message.includes(dataRoot), false);
+  } finally {
+    rmSync(parentRoot, { recursive: true, force: true });
+  }
+});
+
+type TestRuntimeGlobal = typeof globalThis & {
+  __justStudyRuntime?: ReturnType<typeof getRuntime>;
+};
+
+function clearTestRuntime(): void {
+  delete (globalThis as TestRuntimeGlobal).__justStudyRuntime;
+}
+
+function setTestRuntime(
+  dataRoot: string,
+  db: Database.Database | null,
+): void {
+  (globalThis as TestRuntimeGlobal).__justStudyRuntime = { dataRoot, db };
+}
+
+function restoreDataRootEnvironment(previous: string | undefined): void {
+  if (previous === undefined) {
+    delete process.env.JUST_STUDY_DATA_DIR;
+  } else {
+    process.env.JUST_STUDY_DATA_DIR = previous;
+  }
+}
+
+test("keeps one hot-reload-safe runtime for the configured data root", () => {
+  const dataRoot = makeDataRoot();
+  const previous = process.env.JUST_STUDY_DATA_DIR;
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+  clearTestRuntime();
+
+  try {
+    const first = getRuntime();
+    const second = getRuntime();
+    assert.equal(first, second);
+    assert.equal(first.dataRoot, resolve(dataRoot));
+    assert.equal(requireDatabase(first).open, true);
+  } finally {
+    (globalThis as TestRuntimeGlobal).__justStudyRuntime?.db?.close();
+    clearTestRuntime();
+    restoreDataRootEnvironment(previous);
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("keeps runtime and storage health available after database startup failure", () => {
+  const dataRoot = makeDataRoot();
+  const seeded = new Database(databasePath(dataRoot));
+  const previous = process.env.JUST_STUDY_DATA_DIR;
+  seeded.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
+  seeded.close();
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+  clearTestRuntime();
+
+  try {
+    const runtime = getRuntime();
+    const health = getHealth(runtime.db, runtime.dataRoot);
+    assert.equal(runtime.dataRoot, resolve(dataRoot));
+    assert.equal(runtime.db, null);
+    assert.equal(health.database, "error");
+    assert.equal(health.storage, "ok");
+    assert.throws(() => requireDatabase(runtime), /Database is unavailable/);
+  } finally {
+    clearTestRuntime();
+    restoreDataRootEnvironment(previous);
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+function assertSafeBody(
+  body: unknown,
+  dataRoot: string,
+): void {
+  const serialized = JSON.stringify(body);
+  assert.equal(serialized.includes(dataRoot), false);
+  assert.equal(serialized.includes("Error:"), false);
+  assert.equal(serialized.includes("\n    at "), false);
+}
+
+test("health route returns 200 for healthy runtime", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const response = getHealthRoute();
+    const body = (await response.json()) as { ok: boolean; message: string };
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.match(body.message, /정상/);
+    assertSafeBody(body, dataRoot);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("health route returns 503 for corrupt Markdown", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const created = createCourse(db, dataRoot, {
+    requestId: "90000000-0000-4000-8000-000000000001",
+    title: "Corrupt health",
+    goal: "손상 상태를 HTTP 실패로 보고한다.",
+  });
+  writeFileSync(join(dataRoot, created.course.markdownPath), "# broken\n", "utf8");
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const response = getHealthRoute();
+    const body = (await response.json()) as {
+      ok: boolean;
+      corruptCourseIds: string[];
+    };
+    assert.equal(response.status, 503);
+    assert.equal(body.ok, false);
+    assert.deepEqual(body.corruptCourseIds, [created.course.id]);
+    assertSafeBody(body, dataRoot);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("health route remains callable when the database is unavailable", async () => {
+  const dataRoot = makeDataRoot();
+  setTestRuntime(dataRoot, null);
+
+  try {
+    const response = getHealthRoute();
+    const body = (await response.json()) as {
+      database: string;
+      storage: string;
+      message: string;
+    };
+    assert.equal(response.status, 503);
+    assert.equal(body.database, "error");
+    assert.equal(body.storage, "ok");
+    assert.match(body.message, /데이터베이스|스키마|권한/);
+    assertSafeBody(body, dataRoot);
+  } finally {
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("courses GET returns the course list", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const created = createCourse(db, dataRoot, {
+    requestId: "90000000-0000-4000-8000-000000000002",
+    title: "List API",
+    goal: "목록 API를 확인한다.",
+  });
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const response = listCoursesRoute();
+    const body = (await response.json()) as Array<{ id: string; title: string }>;
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.map(({ id }) => id), [created.course.id]);
+    assert.equal(body[0]?.title, "List API");
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("courses POST returns 201 then 200 for an idempotent replay", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const input = {
+    requestId: "90000000-0000-4000-8000-000000000003",
+    title: "Create API",
+    goal: "과정 생성 API를 확인한다.",
+  };
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const first = await createCourseRoute(
+      new Request("http://127.0.0.1/api/courses", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    );
+    const firstBody = (await first.json()) as { id: string };
+    const replay = await createCourseRoute(
+      new Request("http://127.0.0.1/api/courses", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    );
+    const replayBody = (await replay.json()) as { id: string };
+
+    assert.equal(first.status, 201);
+    assert.equal(replay.status, 200);
+    assert.equal(replayBody.id, firstBody.id);
+    assert.equal(listCourses(db).length, 1);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("courses POST returns 400 for validation failure", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const response = await createCourseRoute(
+      new Request("http://127.0.0.1/api/courses", {
+        method: "POST",
+        body: JSON.stringify({
+          requestId: "not-a-uuid",
+          title: "",
+          goal: "",
+        }),
+      }),
+    );
+    const body = (await response.json()) as { error: string };
+    assert.equal(response.status, 400);
+    assert.match(body.error, /요청 ID|과정|목표/);
+    assert.equal(listCourses(db).length, 0);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("courses POST returns 400 for malformed JSON", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const response = await createCourseRoute(
+      new Request("http://127.0.0.1/api/courses", {
+        method: "POST",
+        body: "{broken",
+      }),
+    );
+    const body = (await response.json()) as { error: string };
+    assert.equal(response.status, 400);
+    assert.match(body.error, /JSON/);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("courses POST returns safe 503 when the database is unavailable", async () => {
+  const dataRoot = makeDataRoot();
+  setTestRuntime(dataRoot, null);
+
+  try {
+    const response = await createCourseRoute(
+      new Request("http://127.0.0.1/api/courses", {
+        method: "POST",
+        body: JSON.stringify({
+          requestId: "90000000-0000-4000-8000-000000000004",
+          title: "Unavailable",
+          goal: "데이터베이스 실패를 확인한다.",
+        }),
+      }),
+    );
+    const body = (await response.json()) as { error: string };
+    assert.equal(response.status, 503);
+    assert.match(body.error, /데이터베이스|스키마|권한/);
+    assertSafeBody(body, dataRoot);
+  } finally {
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("courses POST returns safe 500 for storage failure", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  writeFileSync(join(dataRoot, "courses"), `private path: ${dataRoot}`, "utf8");
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const response = await createCourseRoute(
+      new Request("http://127.0.0.1/api/courses", {
+        method: "POST",
+        body: JSON.stringify({
+          requestId: "90000000-0000-4000-8000-000000000005",
+          title: "Storage failure",
+          goal: "저장 실패를 확인한다.",
+        }),
+      }),
+    );
+    const body = (await response.json()) as { error: string };
+    assert.equal(response.status, 500);
+    assert.match(body.error, /저장|권한|다시/);
+    assertSafeBody(body, dataRoot);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("course detail GET returns 200 or 404", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const created = createCourse(db, dataRoot, {
+    requestId: "90000000-0000-4000-8000-000000000006",
+    title: "Detail API",
+    goal: "상세 API를 확인한다.",
+  });
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const found = await getCourseRoute(new Request("http://127.0.0.1"), {
+      params: Promise.resolve({ id: created.course.id }),
+    });
+    const foundBody = (await found.json()) as {
+      course: { id: string };
+      markdown: string;
+    };
+    const missing = await getCourseRoute(new Request("http://127.0.0.1"), {
+      params: Promise.resolve({
+        id: "99999999-9999-4999-8999-999999999999",
+      }),
+    });
+
+    assert.equal(found.status, 200);
+    assert.equal(foundBody.course.id, created.course.id);
+    assert.match(foundBody.markdown, /Detail API/);
+    assert.equal(missing.status, 404);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("course detail GET returns safe 500 for corrupt Markdown", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const created = createCourse(db, dataRoot, {
+    requestId: "90000000-0000-4000-8000-000000000007",
+    title: "Corrupt detail",
+    goal: "손상 상세 응답을 확인한다.",
+  });
+  writeFileSync(
+    join(dataRoot, created.course.markdownPath),
+    `# leaked ${dataRoot}\n`,
+    "utf8",
+  );
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const response = await getCourseRoute(new Request("http://127.0.0.1"), {
+      params: Promise.resolve({ id: created.course.id }),
+    });
+    const body = (await response.json()) as { error: string };
+    assert.equal(response.status, 500);
+    assert.match(body.error, /읽|복구|다시/);
+    assertSafeBody(body, dataRoot);
+  } finally {
+    db.close();
+    clearTestRuntime();
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
