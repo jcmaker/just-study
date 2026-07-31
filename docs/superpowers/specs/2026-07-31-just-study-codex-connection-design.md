@@ -2,8 +2,7 @@
 
 ## 상태
 
-2026-07-31 브레인스토밍에서 승인되고 사용자 검토 의견을 반영함. 구현 전 최종 문서
-확인 대기.
+2026-07-31 브레인스토밍과 사용자 최종 검토에서 승인됨.
 
 ## 목적
 
@@ -88,6 +87,8 @@ tests/codex-skill.test.ts
 - `src/server/mcp.ts`는 서버 생성, Zod 스키마, 도구 등록과 오류 변환만 담당한다.
 - `src/app/mcp/route.ts`는 로컬 요청 보안과 크기 제한 후 공식 MCP 핸들러에 전달한다.
 - 제품 서비스 규칙은 `courses.ts`, `learning.ts`, `health.ts`에 계속 존재한다.
+  `learning.ts`에는 고정 enum으로 한 문서만 검증해 읽는 `getLearningDocument`를
+  추가하고, `storage.ts`의 기존 `StorageError`만 공개해 안전한 오류 분류에 사용한다.
 
 프로젝트 설정의 기본 URL은 `http://127.0.0.1:3000/mcp`다. MCP 연결은
 `required = false`로 두어 서버가 꺼졌다는 이유로 Codex 자체가 시작되지 않는
@@ -95,7 +96,7 @@ tests/codex-skill.test.ts
 정확한 실행 명령을 안내한다. 최소 설정 계약은 다음과 같다.
 
 ```toml
-[mcp_servers.just_study]
+[mcp_servers.just-study]
 url = "http://127.0.0.1:3000/mcp"
 required = false
 default_tools_approval_mode = "writes"
