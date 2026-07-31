@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 
 import type { DatabaseHandle } from "./database.ts";
 import {
@@ -108,6 +107,14 @@ function findByRequestId(db: DatabaseHandle, requestId: string): Course | null {
   return row ? rowToCourse(row) : null;
 }
 
+function isRequestIdUniqueConstraint(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as Error & { code?: unknown }).code === "SQLITE_CONSTRAINT_UNIQUE" &&
+    error.message === "UNIQUE constraint failed: courses.request_id"
+  );
+}
+
 export function getCourse(db: DatabaseHandle, id: string): Course | null {
   const row = db
     .prepare("SELECT * FROM courses WHERE id = ?")
@@ -156,16 +163,16 @@ export function createCourse(
       finalizeCourseFiles(draft);
     })();
   } catch (error) {
-    if (existsSync(draft.tempDirectory)) {
-      try {
-        discardCourseDraft(draft);
-      } catch {
-        // The transaction or finalization failure is the actionable error.
-      }
+    try {
+      discardCourseDraft(draft);
+    } catch {
+      // The transaction or finalization failure is the actionable error.
     }
 
-    const duplicate = findByRequestId(db, input.requestId);
-    if (duplicate) return { course: duplicate, created: false };
+    if (isRequestIdUniqueConstraint(error)) {
+      const duplicate = findByRequestId(db, input.requestId);
+      if (duplicate) return { course: duplicate, created: false };
+    }
     throw error;
   }
 

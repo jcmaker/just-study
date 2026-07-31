@@ -391,17 +391,70 @@ test("uses request ID as the idempotency identity even when repeated payload dif
   }
 });
 
+test("rethrows a non-request error when a request duplicate appears after lookup", () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const requestId = "29999999-9999-4999-8999-999999999999";
+  const originalTransaction = db.transaction;
+  const forcedError = new Error("forced non-request failure");
+
+  db.transaction = (() => () => {
+    originalTransaction.call(db, () => {
+      db.prepare(`
+        INSERT INTO courses (
+          id, request_id, title, goal, markdown_path, markdown_sha256, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+          "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          requestId,
+          "Concurrent winner",
+          "먼저 저장된 과정을 사용한다.",
+          "courses/concurrent/course.md",
+          "0".repeat(64),
+          "2026-07-31T00:00:00.000Z",
+          "2026-07-31T00:00:00.000Z",
+        );
+    })();
+    throw forcedError;
+  }) as unknown as typeof db.transaction;
+
+  try {
+    assert.equal(listCourses(db).length, 0);
+    assert.throws(
+      () =>
+        createCourse(db, dataRoot, {
+          requestId,
+          title: "Losing request",
+          goal: "원래 오류가 보존되는지 확인한다.",
+        }),
+      (error) => error === forcedError,
+    );
+    assert.equal(listCourses(db).length, 1);
+  } finally {
+    db.transaction = originalTransaction;
+    db.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("escapes user Markdown while preserving the fixed document structure", () => {
   const dataRoot = makeDataRoot();
   const db = openDatabase(dataRoot);
+  const title = "<!-- # heading -->";
+  const goal = '# heading\n> quote\n<!-- comment -->\n<script>alert("x")</script>';
 
   try {
     const created = createCourse(db, dataRoot, {
       requestId: "33333333-3333-4333-8333-333333333333",
-      title: "<!-- # heading -->",
-      goal: '# heading\n> quote\n<!-- comment -->\n<script>alert("x")</script>',
+      title,
+      goal,
     });
+    const stored = getCourse(db, created.course.id);
 
+    assert.equal(created.course.title, title);
+    assert.equal(created.course.goal, goal);
+    assert.equal(stored?.title, title);
+    assert.equal(stored?.goal, goal);
     assert.equal(
       getCourseDocument(db, dataRoot, created.course.id)?.markdown,
       "# \\<\\!\\-\\- \\# heading \\-\\-\\>\n\n" +
