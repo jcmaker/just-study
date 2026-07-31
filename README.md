@@ -5,7 +5,7 @@ shells in SQLite and human-readable Markdown.
 
 ## Requirements
 
-- Node.js 22 or newer
+- Node.js 22.23.1 or newer
 - npm
 
 ## Run locally
