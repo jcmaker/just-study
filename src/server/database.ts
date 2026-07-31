@@ -39,6 +39,12 @@ export function openDatabase(dataRoot: string): DatabaseHandle {
   const db = new Database(join(dataRoot, "just-study.sqlite"));
 
   try {
+    const current = db.pragma("user_version", { simple: true }) as number;
+
+    if (current > SCHEMA_VERSION) {
+      throw new Error(`Database schema ${current} is newer than supported ${SCHEMA_VERSION}`);
+    }
+
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");
     migrateDatabase(db);

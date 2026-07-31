@@ -40,13 +40,14 @@ test("migrates an empty SQLite database", () => {
   }
 });
 
-test("rejects a newer schema without changing it", () => {
+test("rejects a newer schema without changing its database", () => {
   const dataRoot = makeDataRoot();
   const path = databasePath(dataRoot);
   const seeded = new Database(path);
 
   try {
     seeded.pragma("user_version = 2");
+    seeded.pragma("journal_mode = DELETE");
   } finally {
     seeded.close();
   }
@@ -60,6 +61,7 @@ test("rejects a newer schema without changing it", () => {
     const db = new Database(path);
     try {
       assert.equal(db.pragma("user_version", { simple: true }), 2);
+      assert.equal(db.pragma("journal_mode", { simple: true }), "delete");
       assert.equal(coursesTable(db), undefined);
     } finally {
       db.close();
