@@ -72,6 +72,39 @@ const DAY_OBJECTIVES = Array.from({ length: 30 }, (_, index) => ({
   objective: `컴퓨터 과학 핵심 목표 ${index + 1}을 자기 말로 설명한다`,
 }));
 
+const CS_NON_MAJOR_OBJECTIVES = [
+  "시스템과 추상화의 관계를 자기 말로 설명한다",
+  "이진수로 정보가 표현되는 원리를 설명한다",
+  "불 논리로 간단한 조건을 계산한다",
+  "알고리즘을 명확한 단계로 표현한다",
+  "변수와 제어 흐름으로 작은 절차를 추적한다",
+  "함수로 문제를 분해하는 이유를 설명한다",
+  "디버깅과 테스트로 오류를 좁힌다",
+  "시간 복잡도로 두 접근을 비교한다",
+  "배열과 리스트의 접근 특성을 비교한다",
+  "스택과 큐를 알맞은 문제에 적용한다",
+  "해시 테이블의 조회 원리를 설명한다",
+  "재귀 호출의 종료 조건을 설계한다",
+  "트리 구조로 계층 데이터를 표현한다",
+  "그래프로 관계와 경로를 표현한다",
+  "검색과 정렬 방법을 입력 특성에 맞게 고른다",
+  "메모리와 프로세스의 역할을 구분한다",
+  "운영체제가 자원을 중재하는 방식을 설명한다",
+  "동시성에서 공유 상태 문제가 생기는 이유를 설명한다",
+  "파일과 영구 저장의 차이를 설명한다",
+  "관계형 데이터베이스의 테이블 관계를 설계한다",
+  "SQL로 필요한 데이터를 질의한다",
+  "네트워크에서 계층과 주소의 역할을 설명한다",
+  "HTTP 요청과 응답의 흐름을 추적한다",
+  "입력 검증과 최소 권한을 보안 사례에 적용한다",
+  "모듈 경계로 변경 영향을 줄이는 방법을 설명한다",
+  "Git으로 변경 이력을 안전하게 공유한다",
+  "API 계약으로 두 프로그램의 협업을 설명한다",
+  "데이터와 AI 모델의 기본 관계를 설명한다",
+  "작은 캡스톤 시스템의 구조를 설계한다",
+  "캡스톤을 구현하고 선택한 구조를 설명한다",
+] as const;
+
 function validResearch(): ResearchBundleInput {
   const firstId = crypto.randomUUID();
   const secondId = crypto.randomUUID();
@@ -1276,18 +1309,34 @@ test("a 4/5 attempt moves to remediation and only a new five-question attempt ma
   });
 });
 
-test("rejects invalid grade submissions without recording a response", () => {
+test("rejects invalid grade submissions without mutating responses or revision", () => {
   withDataRoot((dataRoot, db) => {
     let snapshot = readyForQuiz(db, dataRoot);
     snapshot = startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, questions: quizQuestions("invalid") });
     const attempt = snapshot.quizAttempts[0]!;
-    const invalid: Parameters<typeof gradeQuiz>[2] = { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, attemptId: attempt.id, grades: [{ ...terminalGrades(attempt)[0]!, result: "needs_clarification" }] };
-    assert.throws(() => gradeQuiz(db, dataRoot, invalid), LearningValidationError);
-    invalid.grades = [null as unknown as QuestionGradeInput];
-    assert.throws(() => gradeQuiz(db, dataRoot, invalid), LearningValidationError);
-    const after = getLearningSnapshot(db, dataRoot, snapshot.course.id)!;
-    assert.equal(after.course.revision, snapshot.course.revision);
-    assert.ok(after.quizAttempts[0]!.questions.every(({ responses }) => responses.length === 0));
+    const assertNoMutation = (revision: number, responseCount: number) => {
+      const after = getLearningSnapshot(db, dataRoot, snapshot.course.id)!;
+      assert.equal(after.course.revision, revision);
+      assert.equal(after.quizAttempts[0]!.questions.flatMap(({ responses }) => responses).length, responseCount);
+    };
+    const firstGrade = terminalGrades(attempt)[0]!;
+    const input: Parameters<typeof gradeQuiz>[2] = { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, attemptId: attempt.id, grades: [] };
+    assert.throws(() => gradeQuiz(db, dataRoot, input), LearningValidationError);
+    assertNoMutation(snapshot.course.revision, 0);
+    input.grades = [firstGrade, { ...firstGrade, answer: "중복 답변" }];
+    assert.throws(() => gradeQuiz(db, dataRoot, input), LearningValidationError);
+    assertNoMutation(snapshot.course.revision, 0);
+    input.grades = [firstGrade];
+    input.attemptId = crypto.randomUUID();
+    assert.throws(() => gradeQuiz(db, dataRoot, input), LearningStateError);
+    assertNoMutation(snapshot.course.revision, 0);
+    input.attemptId = attempt.id;
+    input.expectedRevision = snapshot.course.revision - 1;
+    assert.throws(() => gradeQuiz(db, dataRoot, input), LearningRevisionConflictError);
+    assertNoMutation(snapshot.course.revision, 0);
+    snapshot = gradeQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, attemptId: attempt.id, grades: terminalGrades(attempt) });
+    assert.throws(() => gradeQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, attemptId: attempt.id, grades: [firstGrade] }), LearningStateError);
+    assertNoMutation(snapshot.course.revision, 5);
   });
 });
 
@@ -1318,6 +1367,10 @@ test("quiz creation requires daily research, all lesson parts, unique normalized
     const duplicate = quizQuestions("normalized prompt");
     duplicate[1]!.prompt = `  ${duplicate[0]!.prompt}  `;
     assert.throws(() => startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, questions: duplicate }), LearningValidationError);
+    const nfcDuplicate = quizQuestions("NFC normalized prompt");
+    nfcDuplicate[0]!.prompt = "café에서 추상화의 역할을 설명한다.";
+    nfcDuplicate[1]!.prompt = "cafe\u0301에서 추상화의 역할을 설명한다.";
+    assert.throws(() => startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, questions: nfcDuplicate }), LearningValidationError);
     assert.throws(() => startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision - 1, questions: quizQuestions("stale") }), LearningRevisionConflictError);
   });
 });
@@ -1554,5 +1607,182 @@ test("Day 30 completes the course without creating Day 31", () => {
       () => readFileSync(join(dataRoot, "courses", snapshot.course.id, "current-day.md"), "utf8"),
       { code: "ENOENT" },
     );
+  });
+});
+
+test("completes the CS non-major course through every persisted stage", () => {
+  withDataRoot((dataRoot, initialDb) => {
+    let db = initialDb;
+    const shell = createShell(db, dataRoot);
+    assert.equal(shell.status, "draft");
+
+    const approval = validApproval(shell.id);
+    approval.days = CS_NON_MAJOR_OBJECTIVES.map((objective) => ({ objective }));
+    const suppliedUrls = approval.research.sources.map(({ url }) => url);
+    let snapshot = approveOutline(db, dataRoot, approval);
+
+    const reopen = (): LearningSnapshot => {
+      if (db.open) db.close();
+      db = openDatabase(dataRoot);
+      return getLearningSnapshot(db, dataRoot, shell.id)!;
+    };
+
+    try {
+      snapshot = reopen();
+      assert.equal(snapshot.currentDay?.dayNumber, 1);
+      assert.equal(snapshot.course.currentStage, "lecture");
+
+      const dayOneResearch = dailyResearch(1);
+      suppliedUrls.push(...dayOneResearch.sources.map(({ url }) => url));
+      snapshot = recordDailyResearch(db, dataRoot, {
+        courseId: shell.id,
+        expectedRevision: snapshot.course.revision,
+        research: dayOneResearch,
+      });
+      snapshot = saveLearningCheckpoint(db, dataRoot, {
+        courseId: shell.id,
+        expectedRevision: snapshot.course.revision,
+        lesson: lessonCheckpoint(1),
+        understoodConcepts: [{ key: "abstraction", label: "추상화" }],
+        remediationConcepts: [],
+      });
+      const exactCheckpoint = snapshot.documents.currentDay;
+      snapshot = reopen();
+      assert.equal(snapshot.documents.currentDay, exactCheckpoint);
+
+      snapshot = startQuiz(db, dataRoot, {
+        courseId: shell.id,
+        expectedRevision: snapshot.course.revision,
+        questions: quizQuestions("Day 1 첫 시도"),
+      });
+      const firstAttempt = snapshot.quizAttempts[0]!;
+      const firstGrades = terminalGrades(firstAttempt, 3);
+      firstGrades[1] = {
+        questionId: firstAttempt.questions[1]!.id,
+        answer: "상황에 따라 다르다.",
+        result: "needs_clarification",
+        feedback: "조건을 더 설명해야 판정할 수 있다.",
+        clarificationQuestion: "어떤 조건에서 달라지는지 예를 들어 설명해 주세요.",
+      };
+      snapshot = gradeQuiz(db, dataRoot, {
+        courseId: shell.id,
+        expectedRevision: snapshot.course.revision,
+        attemptId: firstAttempt.id,
+        grades: firstGrades,
+      });
+      snapshot = reopen();
+      assert.equal(snapshot.course.currentStage, "quiz");
+      assert.equal(snapshot.quizAttempts[0]!.questions[1]!.responses.length, 1);
+
+      snapshot = gradeQuiz(db, dataRoot, {
+        courseId: shell.id,
+        expectedRevision: snapshot.course.revision,
+        attemptId: firstAttempt.id,
+        grades: [{
+          questionId: firstAttempt.questions[1]!.id,
+          answer: "입력 범위가 유한한 조건에서 달라진다.",
+          result: "correct",
+          feedback: "조건을 구체적으로 설명했다.",
+        }],
+      });
+      assert.equal(snapshot.course.currentStage, "remediation");
+      assert.equal(snapshot.quizAttempts[0]!.score, 4);
+      assert.throws(() => completeDay(db, dataRoot, {
+        courseId: shell.id,
+        expectedRevision: snapshot.course.revision,
+        reflection: reflection(1),
+      }), LearningStateError);
+
+      snapshot = startRemediationQuiz(db, dataRoot, {
+        courseId: shell.id,
+        expectedRevision: snapshot.course.revision,
+        remediationMarkdown: "틀린 개념을 다른 설명과 새 예제로 다시 학습했다.",
+        questions: quizQuestions("Day 1 보충"),
+      });
+      snapshot = gradeQuiz(db, dataRoot, {
+        courseId: shell.id,
+        expectedRevision: snapshot.course.revision,
+        attemptId: snapshot.quizAttempts.at(-1)!.id,
+        grades: terminalGrades(snapshot.quizAttempts.at(-1)!),
+      });
+      assert.equal(snapshot.course.currentStage, "reflection");
+      assert.equal(snapshot.documents.journal, "# 학습 기록\n");
+
+      snapshot = reopen();
+      const actualDayOneReflection = {
+        learned: "추상화가 복잡한 세부를 감추는 방법임을 배웠다.",
+        confusing: "추상화 경계를 어디에 둘지는 더 연습하고 싶다.",
+        feeling: "비전공자도 예제를 따라가니 연결되는 느낌이 들었다.",
+      };
+      snapshot = completeDay(db, dataRoot, {
+        courseId: shell.id,
+        expectedRevision: snapshot.course.revision,
+        reflection: actualDayOneReflection,
+      });
+      assert.equal(snapshot.currentDay?.dayNumber, 2);
+
+      for (let dayNumber = 2; dayNumber <= 30; dayNumber += 1) {
+        if (dayNumber === 30) {
+          snapshot = reopen();
+          assert.equal(snapshot.currentDay?.dayNumber, 30);
+          assert.equal(snapshot.course.currentStage, "lecture");
+        }
+        const research = dailyResearch(dayNumber);
+        suppliedUrls.push(...research.sources.map(({ url }) => url));
+        snapshot = recordDailyResearch(db, dataRoot, {
+          courseId: shell.id,
+          expectedRevision: snapshot.course.revision,
+          research,
+        });
+        snapshot = saveLearningCheckpoint(db, dataRoot, {
+          courseId: shell.id,
+          expectedRevision: snapshot.course.revision,
+          lesson: lessonCheckpoint(dayNumber),
+          understoodConcepts: [],
+          remediationConcepts: [],
+        });
+        snapshot = startQuiz(db, dataRoot, {
+          courseId: shell.id,
+          expectedRevision: snapshot.course.revision,
+          questions: quizQuestions(`Day ${dayNumber} 통과`),
+        });
+        snapshot = gradeQuiz(db, dataRoot, {
+          courseId: shell.id,
+          expectedRevision: snapshot.course.revision,
+          attemptId: snapshot.quizAttempts.at(-1)!.id,
+          grades: terminalGrades(snapshot.quizAttempts.at(-1)!),
+        });
+        snapshot = completeDay(db, dataRoot, {
+          courseId: shell.id,
+          expectedRevision: snapshot.course.revision,
+          reflection: reflection(dayNumber),
+        });
+      }
+
+      assert.equal(snapshot.course.status, "completed");
+      assert.equal(snapshot.days.length, 30);
+      assert.equal(snapshot.currentDay, null);
+      assert.equal((snapshot.documents.journal!.match(/^## Day \d+ — /gm) ?? []).length, 30);
+      assert.equal(
+        (db.prepare("SELECT COUNT(*) AS count FROM course_days WHERE day_number = 31")
+          .get() as { count: number }).count,
+        0,
+      );
+      for (const text of Object.values(actualDayOneReflection)) {
+        assert.match(snapshot.documents.journal!, new RegExp(text));
+      }
+      const health = getHealth(db, dataRoot);
+      assert.equal(health.ok, true);
+      assert.deepEqual(health.corruptCourseIds, []);
+
+      const storedUrls = (
+        db.prepare("SELECT url FROM research_sources ORDER BY url").all() as {
+          url: string;
+        }[]
+      ).map(({ url }) => url);
+      assert.deepEqual(storedUrls, suppliedUrls.slice().sort());
+    } finally {
+      if (db.open) db.close();
+    }
   });
 });
