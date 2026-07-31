@@ -250,21 +250,26 @@ test("rejects tampered Markdown with a checksum mismatch", () => {
   }
 });
 
-test("cleans up a draft after a preparation failure", () => {
+test("cleans up a created draft when its Markdown write fails", { concurrency: false }, () => {
   const dataRoot = makeDataRoot();
   const temporaryRoot = join(dataRoot, "tmp");
+  const coursesRoot = join(dataRoot, "courses");
 
   try {
     mkdirSync(temporaryRoot);
-    chmodSync(temporaryRoot, 0o500);
-    assert.throws(
-      () => prepareCourseFiles(dataRoot, courseId, "# Test\n"),
-      /Storage preparation failed/,
-    );
-    chmodSync(temporaryRoot, 0o700);
+    mkdirSync(coursesRoot);
+    const originalUmask = process.umask(0o222);
+    try {
+      assert.throws(
+        () => prepareCourseFiles(dataRoot, courseId, "# Test\n"),
+        /Storage preparation failed/,
+      );
+    } finally {
+      process.umask(originalUmask);
+    }
     assert.deepEqual(listTemporaryEntries(dataRoot), []);
+    assert.equal(existsSync(join(coursesRoot, courseId)), false);
   } finally {
-    chmodSync(temporaryRoot, 0o700);
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
@@ -284,6 +289,28 @@ test("leaves user final data and the draft intact when finalization fails", () =
     discardCourseDraft(draft);
     assert.equal(existsSync(draft.tempDirectory), false);
     assert.equal(readFileSync(draft.finalMarkdownPath, "utf8"), "# User data\n");
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("keeps the draft when an atomic final rename fails", () => {
+  const dataRoot = makeDataRoot();
+  const coursesRoot = join(dataRoot, "courses");
+
+  try {
+    const draft = prepareCourseFiles(dataRoot, courseId, "# Test\n");
+    chmodSync(coursesRoot, 0o500);
+    try {
+      assert.throws(() => finalizeCourseFiles(draft), /Storage finalization failed/);
+    } finally {
+      chmodSync(coursesRoot, 0o700);
+    }
+
+    assert.equal(existsSync(draft.tempDirectory), true);
+    assert.equal(existsSync(draft.finalDirectory), false);
+    discardCourseDraft(draft);
+    assert.equal(existsSync(draft.tempDirectory), false);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

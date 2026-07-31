@@ -22,7 +22,6 @@ export type CourseDraft = {
 
 type DraftRecord = CourseDraft & {
   root: string;
-  temporaryMarkdownPath: string;
   finalMarkdownInTempPath: string;
 };
 
@@ -142,7 +141,7 @@ export function prepareCourseFiles(
       relativeMarkdownPath: `courses/${courseId}/course.md`,
       sha256: sha256(markdown),
     };
-    drafts.set(draft, { ...draft, root, temporaryMarkdownPath, finalMarkdownInTempPath });
+    drafts.set(draft, { ...draft, root, finalMarkdownInTempPath });
     return draft;
   } catch (error) {
     if (temporaryDirectory) {
