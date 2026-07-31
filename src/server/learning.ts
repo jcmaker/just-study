@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { DatabaseHandle } from "./database.ts";
 import { UUID_PATTERN, getCourse, type Course, type LearningPreference } from "./courses.ts";
@@ -426,6 +426,183 @@ export function saveLearningCheckpoint(
       course.id,
     );
     advanceRevision(db, course.id, input.expectedRevision, now);
+  });
+  return getLearningSnapshot(db, dataRoot, course.id)!;
+}
+
+function promptSha256(prompt: string): string {
+  return createHash("sha256").update(prompt.trim().replace(/\s+/g, " ").normalize("NFC"), "utf8").digest("hex");
+}
+
+type ValidatedQuizQuestion = QuizQuestionInput & { promptHash: string };
+
+function validateQuizQuestions(value: unknown): ValidatedQuizQuestion[] {
+  if (!Array.isArray(value) || value.length !== 5) throw new LearningValidationError("quiz must contain exactly five questions");
+  const ids = new Set<string>(), conceptKeys = new Set<string>(), promptHashes = new Set<string>();
+  return value.map((value, index) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new LearningValidationError(`questions[${index}] is invalid`);
+    const question = value as Partial<QuizQuestionInput>;
+    if (typeof question.id !== "string" || !UUID_PATTERN.test(question.id) || ids.has(question.id)) throw new LearningValidationError(`questions[${index}] ID is invalid or duplicated`);
+    if (typeof question.conceptKey !== "string" || !CONCEPT_KEY_PATTERN.test(question.conceptKey) || conceptKeys.has(question.conceptKey)) throw new LearningValidationError(`questions[${index}] concept key is invalid or duplicated`);
+    const conceptLabel = requiredText(question.conceptLabel, `questions[${index}] concept label`, 300);
+    if (/[\r\n]/.test(conceptLabel)) throw new LearningValidationError("concept label must be single-line");
+    const prompt = requiredText(question.prompt, `questions[${index}] prompt`, 10_000);
+    const gradingCriteria = requiredText(question.gradingCriteria, `questions[${index}] grading criteria`, 10_000);
+    const promptHash = promptSha256(prompt);
+    if (promptHashes.has(promptHash)) throw new LearningValidationError("question prompt is duplicated");
+    ids.add(question.id); conceptKeys.add(question.conceptKey); promptHashes.add(promptHash);
+    return { id: question.id, conceptKey: question.conceptKey, conceptLabel, prompt, gradingCriteria, promptHash };
+  });
+}
+
+function insertQuizAttempt(db: DatabaseHandle, dayId: string, attemptId: string, attemptNumber: number, questions: readonly ValidatedQuizQuestion[], createdAt: string): void {
+  db.prepare(`INSERT INTO quiz_attempts (id, day_id, attempt_number, status, score, created_at, graded_at) VALUES (?, ?, ?, 'in_progress', NULL, ?, NULL)`).run(attemptId, dayId, attemptNumber, createdAt);
+  const insertQuestion = db.prepare(`INSERT INTO quiz_questions (id, day_id, attempt_id, position, concept_key, concept_label, prompt, prompt_sha256, grading_criteria) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  questions.forEach((question, index) => insertQuestion.run(question.id, dayId, attemptId, index + 1, question.conceptKey, question.conceptLabel, question.prompt, question.promptHash, question.gradingCriteria));
+}
+
+function assertLectureCoverage(db: DatabaseHandle, dayId: string): void {
+  assertDailyResearchRun(db, dayId);
+  const { count } = db.prepare("SELECT COUNT(*) AS count FROM day_lesson_parts WHERE day_id = ?").get(dayId) as { count: number };
+  if (count !== 7) throw new LearningStateError("Daily research and all lesson parts are required");
+}
+
+function quizAttemptNumber(db: DatabaseHandle, dayId: string): number {
+  return (db.prepare("SELECT COALESCE(MAX(attempt_number), 0) + 1 AS number FROM quiz_attempts WHERE day_id = ?").get(dayId) as { number: number }).number;
+}
+
+function newQuizAttempt(id: string, attemptNumber: number, questions: readonly ValidatedQuizQuestion[], now: string): QuizAttempt {
+  return { id, attemptNumber, status: "in_progress", score: null, createdAt: now, gradedAt: null, questions: questions.map((question, index) => ({ id: question.id, position: index + 1, conceptKey: question.conceptKey, conceptLabel: question.conceptLabel, prompt: question.prompt, gradingCriteria: question.gradingCriteria, responses: [] })) };
+}
+
+export function startQuiz(db: DatabaseHandle, dataRoot: string, input: { courseId: string; expectedRevision: number; questions: readonly QuizQuestionInput[] }): LearningSnapshot {
+  if (typeof input !== "object" || input === null || Array.isArray(input) || !UUID_PATTERN.test(input.courseId)) throw new LearningValidationError("courseId is invalid");
+  const questions = validateQuizQuestions(input.questions);
+  const course = getCourse(db, input.courseId);
+  if (!course) throw new LearningStateError("Course does not exist");
+  assertRevision(course, input.expectedRevision);
+  if (course.status !== "active" || course.currentStage !== "lecture" || course.currentDayId === null) throw new LearningStateError("Initial quiz requires an active lecture");
+  assertLectureCoverage(db, course.currentDayId);
+  const snapshot = getLearningSnapshot(db, dataRoot, course.id)!;
+  const day = snapshot.currentDay!, now = new Date().toISOString(), attemptId = randomUUID(), attemptNumber = quizAttemptNumber(db, snapshot.currentDay!.id);
+  const attempt = newQuizAttempt(attemptId, attemptNumber, questions, now);
+  const projected = { ...snapshotData(snapshot), course: { ...snapshot.course, currentStage: "quiz" as const, revision: snapshot.course.revision + 1, updatedAt: now }, quizAttempts: [...snapshot.quizAttempts, attempt] };
+  const update = prepareMarkdownUpdate(dataRoot, course.id, [{ file: "progress.md", expectedSha256: course.progressMarkdownSha256, content: renderProgressMarkdown(projected, now) }]);
+  commitPreparedUpdate(db, update, () => {
+    const latest = getCourse(db, course.id);
+    if (!latest || latest.status !== "active" || latest.currentStage !== "lecture" || latest.currentDayId !== day.id) throw new LearningStateError("Quiz start state changed");
+    assertRevision(latest, input.expectedRevision); assertLectureCoverage(db, day.id);
+    insertQuizAttempt(db, day.id, attemptId, attemptNumber, questions, now);
+    const changed = db.prepare("UPDATE courses SET current_stage = 'quiz', progress_markdown_sha256 = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?").run(update.checksums["progress.md"]!, now, course.id, input.expectedRevision);
+    if (changed.changes !== 1) throw new LearningRevisionConflictError("Course revision changed");
+  });
+  return getLearningSnapshot(db, dataRoot, course.id)!;
+}
+
+export function startRemediationQuiz(db: DatabaseHandle, dataRoot: string, input: { courseId: string; expectedRevision: number; remediationMarkdown: string; questions: readonly QuizQuestionInput[] }): LearningSnapshot {
+  if (typeof input !== "object" || input === null || Array.isArray(input) || !UUID_PATTERN.test(input.courseId)) throw new LearningValidationError("courseId is invalid");
+  const remediationMarkdown = requiredText(input.remediationMarkdown, "remediationMarkdown", 1_000_000);
+  const questions = validateQuizQuestions(input.questions);
+  const course = getCourse(db, input.courseId);
+  if (!course) throw new LearningStateError("Course does not exist");
+  assertRevision(course, input.expectedRevision);
+  if (course.status !== "active" || course.currentStage !== "remediation" || course.currentDayId === null) throw new LearningStateError("Remediation quiz requires remediation stage");
+  const snapshot = getLearningSnapshot(db, dataRoot, course.id)!;
+  const day = snapshot.currentDay!;
+  const oldHashes = new Set((db.prepare("SELECT prompt_sha256 FROM quiz_questions WHERE day_id = ?").all(day.id) as { prompt_sha256: string }[]).map(({ prompt_sha256 }) => prompt_sha256));
+  if (questions.some(({ promptHash }) => oldHashes.has(promptHash))) throw new LearningValidationError("remediation questions must be new");
+  const coveredConcepts = new Set(questions.map(({ conceptKey }) => conceptKey));
+  if (snapshot.remediationConcepts.length === 0 || snapshot.remediationConcepts.some(({ key }) => !coveredConcepts.has(key))) throw new LearningValidationError("every remediation concept needs a question");
+  const now = new Date().toISOString(), attemptId = randomUUID(), attemptNumber = quizAttemptNumber(db, day.id), attempt = newQuizAttempt(attemptId, attemptNumber, questions, now);
+  const projected = { ...snapshotData(snapshot), course: { ...snapshot.course, currentStage: "quiz" as const, revision: snapshot.course.revision + 1, updatedAt: now }, quizAttempts: [...snapshot.quizAttempts, attempt] };
+  const update = prepareMarkdownUpdate(dataRoot, course.id, [
+    { file: "current-day.md", expectedSha256: course.currentDayMarkdownSha256, content: appendCurrentDayCheckpoint(snapshot.documents.currentDay!, { remediationMarkdown }, now) },
+    { file: "progress.md", expectedSha256: course.progressMarkdownSha256, content: renderProgressMarkdown(projected, now) },
+  ]);
+  commitPreparedUpdate(db, update, () => {
+    const latest = getCourse(db, course.id);
+    if (!latest || latest.status !== "active" || latest.currentStage !== "remediation" || latest.currentDayId !== day.id) throw new LearningStateError("Remediation quiz state changed");
+    assertRevision(latest, input.expectedRevision);
+    const count = db.prepare(`SELECT COUNT(*) AS count FROM quiz_questions WHERE day_id = ? AND prompt_sha256 IN (${questions.map(() => "?").join(", ")})`).get(day.id, ...questions.map(({ promptHash }) => promptHash)) as { count: number };
+    if (count.count !== 0) throw new LearningValidationError("remediation questions must be new");
+    insertQuizAttempt(db, day.id, attemptId, attemptNumber, questions, now);
+    const changed = db.prepare("UPDATE courses SET current_stage = 'quiz', current_day_markdown_sha256 = ?, progress_markdown_sha256 = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?").run(update.checksums["current-day.md"]!, update.checksums["progress.md"]!, now, course.id, input.expectedRevision);
+    if (changed.changes !== 1) throw new LearningRevisionConflictError("Course revision changed");
+  });
+  return getLearningSnapshot(db, dataRoot, course.id)!;
+}
+
+function validateQuestionGrades(value: unknown): QuestionGradeInput[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 5) throw new LearningValidationError("grades must contain 1..5 entries");
+  const questionIds = new Set<string>();
+  return value.map((value, index) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new LearningValidationError(`grades[${index}] is invalid`);
+    const grade = value as Partial<QuestionGradeInput>;
+    if (typeof grade.questionId !== "string" || !UUID_PATTERN.test(grade.questionId) || questionIds.has(grade.questionId)) throw new LearningValidationError(`grades[${index}] question ID is invalid or duplicated`);
+    if (grade.result !== "correct" && grade.result !== "incorrect" && grade.result !== "needs_clarification") throw new LearningValidationError(`grades[${index}] result is invalid`);
+    const answer = requiredText(grade.answer, `grades[${index}] answer`, 50_000), feedback = requiredText(grade.feedback, `grades[${index}] feedback`, 10_000);
+    if (grade.result !== "needs_clarification" && grade.clarificationQuestion !== undefined) throw new LearningValidationError("terminal grade must not include a clarification question");
+    const clarificationQuestion = grade.result === "needs_clarification" ? requiredText(grade.clarificationQuestion, `grades[${index}] clarification question`, 10_000) : undefined;
+    questionIds.add(grade.questionId);
+    return { questionId: grade.questionId, answer, result: grade.result, feedback, ...(clarificationQuestion === undefined ? {} : { clarificationQuestion }) };
+  });
+}
+
+export function gradeQuiz(db: DatabaseHandle, dataRoot: string, input: { courseId: string; expectedRevision: number; attemptId: string; grades: readonly QuestionGradeInput[] }): LearningSnapshot {
+  if (typeof input !== "object" || input === null || Array.isArray(input) || !UUID_PATTERN.test(input.courseId) || !UUID_PATTERN.test(input.attemptId)) throw new LearningValidationError("courseId or attemptId is invalid");
+  const grades = validateQuestionGrades(input.grades);
+  const course = getCourse(db, input.courseId);
+  if (!course) throw new LearningStateError("Course does not exist");
+  assertRevision(course, input.expectedRevision);
+  if (course.status !== "active" || course.currentStage !== "quiz" || course.currentDayId === null) throw new LearningStateError("Quiz grading requires an active quiz");
+  const snapshot = getLearningSnapshot(db, dataRoot, course.id)!;
+  const day = snapshot.currentDay!, attempt = snapshot.quizAttempts.at(-1);
+  if (!attempt || attempt.id !== input.attemptId || attempt.status !== "in_progress") throw new LearningStateError("Attempt is not the current in-progress attempt");
+  const questions = new Map(attempt.questions.map((question) => [question.id, question]));
+  const now = new Date().toISOString(), newResponses = new Map<string, QuizResponse>();
+  for (const grade of grades) {
+    const question = questions.get(grade.questionId);
+    if (!question) throw new LearningValidationError("grade question does not belong to the attempt");
+    const latest = question.responses.at(-1);
+    if (latest && latest.result !== "needs_clarification") throw new LearningStateError("question already has a terminal response");
+    newResponses.set(question.id, { id: randomUUID(), questionId: question.id, responseNumber: (latest?.responseNumber ?? 0) + 1, answer: grade.answer, result: grade.result, feedback: grade.feedback, clarificationQuestion: grade.clarificationQuestion ?? null, createdAt: now });
+  }
+  const projectedQuestions = attempt.questions.map((question) => ({ ...question, responses: newResponses.has(question.id) ? [...question.responses, newResponses.get(question.id)!] : question.responses }));
+  const latestResponses = projectedQuestions.map((question) => question.responses.at(-1));
+  const isTerminal = latestResponses.every((response) => response && response.result !== "needs_clarification");
+  const score = isTerminal ? latestResponses.filter((response) => response!.result === "correct").length : null;
+  const attemptStatus: QuizAttempt["status"] = !isTerminal ? "in_progress" : score === 5 ? "passed" : "failed";
+  const nextStage: Course["currentStage"] = !isTerminal ? "quiz" : score === 5 ? "reflection" : "remediation";
+  const projectedAttempt: QuizAttempt = { ...attempt, status: attemptStatus, score, gradedAt: isTerminal ? now : null, questions: projectedQuestions };
+  const projected = { ...snapshotData(snapshot), course: { ...snapshot.course, currentStage: nextStage, revision: snapshot.course.revision + 1, updatedAt: now }, quizAttempts: snapshot.quizAttempts.map((candidate) => candidate.id === attempt.id ? projectedAttempt : candidate) };
+  const update = prepareMarkdownUpdate(dataRoot, course.id, [{ file: "progress.md", expectedSha256: course.progressMarkdownSha256, content: renderProgressMarkdown(projected, now) }]);
+  commitPreparedUpdate(db, update, () => {
+    const latestCourse = getCourse(db, course.id);
+    if (!latestCourse || latestCourse.status !== "active" || latestCourse.currentStage !== "quiz" || latestCourse.currentDayId !== day.id) throw new LearningStateError("Quiz grading state changed");
+    assertRevision(latestCourse, input.expectedRevision);
+    const latestAttempt = db.prepare("SELECT id, status FROM quiz_attempts WHERE day_id = ? ORDER BY attempt_number DESC LIMIT 1").get(day.id) as { id: string; status: QuizAttempt["status"] } | undefined;
+    if (!latestAttempt || latestAttempt.id !== attempt.id || latestAttempt.status !== "in_progress") throw new LearningStateError("Attempt is no longer in progress");
+    const insert = db.prepare("INSERT INTO quiz_responses (id, attempt_id, question_id, response_number, answer, result, feedback, clarification_question, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    for (const response of newResponses.values()) {
+      const previous = db.prepare("SELECT result, response_number FROM quiz_responses WHERE question_id = ? ORDER BY response_number DESC LIMIT 1").get(response.questionId) as { result: QuizResponse["result"]; response_number: number } | undefined;
+      if ((previous && previous.result !== "needs_clarification") || response.responseNumber !== (previous?.response_number ?? 0) + 1) throw new LearningStateError("Question response state changed");
+      insert.run(response.id, attempt.id, response.questionId, response.responseNumber, response.answer, response.result, response.feedback, response.clarificationQuestion, response.createdAt);
+    }
+    const results = db.prepare("SELECT (SELECT response.result FROM quiz_responses AS response WHERE response.question_id = question.id ORDER BY response.response_number DESC LIMIT 1) AS result FROM quiz_questions AS question WHERE question.attempt_id = ? ORDER BY question.position").all(attempt.id) as { result: QuizResponse["result"] | null }[];
+    const storedTerminal = results.length === 5 && results.every(({ result }) => result !== null && result !== "needs_clarification");
+    const storedScore = storedTerminal ? results.filter(({ result }) => result === "correct").length : null;
+    if (storedTerminal !== isTerminal || storedScore !== score) throw new LearningStateError("Stored quiz results changed");
+    if (storedTerminal) {
+      db.prepare("UPDATE quiz_attempts SET status = ?, score = ?, graded_at = ? WHERE id = ? AND status = 'in_progress'").run(attemptStatus, storedScore, now, attempt.id);
+      if (storedScore === 5 && attempt.attemptNumber > 1) {
+        db.prepare("UPDATE day_concepts SET status = 'understood', updated_at = ? WHERE day_id = ? AND status = 'remediation'").run(now, day.id);
+      } else if (storedScore !== 5) {
+        const upsert = db.prepare("INSERT INTO day_concepts (day_id, concept_key, label, status, updated_at) VALUES (?, ?, ?, 'remediation', ?) ON CONFLICT(day_id, concept_key) DO UPDATE SET label = excluded.label, status = 'remediation', updated_at = excluded.updated_at");
+        for (const question of projectedQuestions) if (question.responses.at(-1)!.result === "incorrect") upsert.run(day.id, question.conceptKey, question.conceptLabel, now);
+      }
+    }
+    const changed = db.prepare("UPDATE courses SET current_stage = ?, progress_markdown_sha256 = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?").run(nextStage, update.checksums["progress.md"]!, now, course.id, input.expectedRevision);
+    if (changed.changes !== 1) throw new LearningRevisionConflictError("Course revision changed");
   });
   return getLearningSnapshot(db, dataRoot, course.id)!;
 }

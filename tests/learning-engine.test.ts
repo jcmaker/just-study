@@ -22,9 +22,14 @@ import {
   LearningValidationError,
   approveOutline,
   getLearningSnapshot,
+  gradeQuiz,
   recordDailyResearch,
   saveLearningCheckpoint,
+  startQuiz,
+  startRemediationQuiz,
   type ApproveOutlineInput,
+  type QuestionGradeInput,
+  type QuizAttempt,
   type ResearchBundleInput,
 } from "../src/server/learning.ts";
 import {
@@ -159,6 +164,49 @@ function dailyResearch(dayNumber: number): ResearchBundleInput {
     evidence: bundle.sources.map(({ id }) => ({ sourceId: id, stance: "supports" as const })),
   }];
   return bundle;
+}
+
+function quizQuestions(prefix: string) {
+  return Array.from({ length: 5 }, (_, index) => ({
+    id: crypto.randomUUID(),
+    conceptKey: `concept-${index + 1}`,
+    conceptLabel: `개념 ${index + 1}`,
+    prompt: `${prefix} 문제 ${index + 1}`,
+    gradingCriteria: `${prefix} 기준 ${index + 1}을 정확히 설명한다`,
+  }));
+}
+
+function readyForQuiz(db: DatabaseHandle, dataRoot: string) {
+  let snapshot = activateCourse(db, dataRoot);
+  snapshot = recordDailyResearch(db, dataRoot, {
+    courseId: snapshot.course.id,
+    expectedRevision: snapshot.course.revision,
+    research: dailyResearch(1),
+  });
+  return saveLearningCheckpoint(db, dataRoot, {
+    courseId: snapshot.course.id,
+    expectedRevision: snapshot.course.revision,
+    lesson: {
+      recallMarkdown: "Day 1 선수 지식을 떠올렸다.",
+      preciseExplanationMarkdown: "Day 1 정확한 설명",
+      eli5Markdown: "Day 1 ELI5 설명",
+      analogyMarkdown: "Day 1 비유",
+      exampleMarkdown: "Day 1 구체적 예제",
+      applicationMarkdown: "Day 1 사용자 적용",
+      interviewMarkdown: "Day 1 사용자 자기 설명과 피드백",
+    },
+    understoodConcepts: [],
+    remediationConcepts: [],
+  });
+}
+
+function terminalGrades(attempt: QuizAttempt, incorrectPosition?: number): QuestionGradeInput[] {
+  return attempt.questions.map((question) => ({
+    questionId: question.id,
+    answer: `${question.position}번 답변`,
+    result: question.position === incorrectPosition ? "incorrect" : "correct",
+    feedback: question.position === incorrectPosition ? "개념 적용을 보완해야 한다." : "정확하다.",
+  }));
 }
 
 function seedVersionOne(dataRoot: string): string {
@@ -1084,5 +1132,191 @@ test("checkpoint COMMIT failure restores concepts, revision, and Markdown", () =
       }).count,
       0,
     );
+  });
+});
+
+test("stores exactly five immutable questions and criteria before any answer", () => {
+  withDataRoot((dataRoot, db) => {
+    const ready = readyForQuiz(db, dataRoot);
+    const snapshot = startQuiz(db, dataRoot, {
+      courseId: ready.course.id, expectedRevision: ready.course.revision, questions: quizQuestions("첫 시도"),
+    });
+    assert.equal(snapshot.course.currentStage, "quiz");
+    assert.equal(snapshot.quizAttempts.length, 1);
+    assert.equal(snapshot.quizAttempts[0]!.questions.length, 5);
+    assert.equal(snapshot.quizAttempts[0]!.status, "in_progress");
+    assert.equal(snapshot.quizAttempts[0]!.score, null);
+    assert.ok(snapshot.quizAttempts[0]!.questions.every(({ responses }) => responses.length === 0));
+    assert.match(snapshot.documents.progress!, /답변 0\/5/);
+  });
+});
+
+test("rejects invalid immutable quiz questions without mutation", () => {
+  withDataRoot((dataRoot, db) => {
+    const ready = readyForQuiz(db, dataRoot);
+    for (const questions of [quizQuestions("four").slice(0, 4), [...quizQuestions("six"), { id: crypto.randomUUID(), conceptKey: "concept-6", conceptLabel: "개념 6", prompt: "six 문제 6", gradingCriteria: "six 기준 6을 정확히 설명한다" }]]) {
+      assert.throws(() => startQuiz(db, dataRoot, { courseId: ready.course.id, expectedRevision: ready.course.revision, questions }), LearningValidationError);
+    }
+    const duplicate = quizQuestions("duplicate");
+    duplicate[1]!.id = duplicate[0]!.id;
+    assert.throws(() => startQuiz(db, dataRoot, { courseId: ready.course.id, expectedRevision: ready.course.revision, questions: duplicate }), LearningValidationError);
+    const blank = quizQuestions("blank");
+    blank[2]!.gradingCriteria = " ";
+    assert.throws(() => startQuiz(db, dataRoot, { courseId: ready.course.id, expectedRevision: ready.course.revision, questions: blank }), LearningValidationError);
+    const malformed = quizQuestions("malformed");
+    (malformed as unknown[])[4] = null;
+    assert.throws(() => startQuiz(db, dataRoot, { courseId: ready.course.id, expectedRevision: ready.course.revision, questions: malformed }), LearningValidationError);
+    assert.equal(getLearningSnapshot(db, dataRoot, ready.course.id)!.course.currentStage, "lecture");
+  });
+});
+
+test("persists answer and clarification history, then transitions 5/5 to reflection", () => {
+  withDataRoot((dataRoot, db) => {
+    let snapshot = readyForQuiz(db, dataRoot);
+    snapshot = startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, questions: quizQuestions("명료화") });
+    const attempt = snapshot.quizAttempts[0]!;
+    const grades = terminalGrades(attempt);
+    grades[1] = { questionId: attempt.questions[1]!.id, answer: "상황에 따라 다르다.", result: "needs_clarification", feedback: "판정에 설명이 더 필요하다.", clarificationQuestion: "어떤 조건에서 달라지는지 예를 들어 설명해 주세요." };
+    snapshot = gradeQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, attemptId: attempt.id, grades });
+    assert.equal(snapshot.course.currentStage, "quiz");
+    assert.equal(snapshot.quizAttempts[0]!.questions[1]!.responses.length, 1);
+    snapshot = gradeQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, attemptId: attempt.id, grades: [{ questionId: attempt.questions[1]!.id, answer: "입력 범위가 유한할 때의 구체적인 예다.", result: "correct", feedback: "조건과 예를 명확히 설명했다." }] });
+    assert.equal(snapshot.course.currentStage, "reflection");
+    assert.equal(snapshot.quizAttempts[0]!.score, 5);
+    assert.equal(snapshot.quizAttempts[0]!.questions[1]!.responses.length, 2);
+  });
+});
+
+test("a 4/5 attempt moves to remediation and only a new five-question attempt may resume", () => {
+  withDataRoot((dataRoot, db) => {
+    let snapshot = readyForQuiz(db, dataRoot);
+    const firstQuestions = quizQuestions("첫 시도");
+    snapshot = startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, questions: firstQuestions });
+    snapshot = gradeQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, attemptId: snapshot.quizAttempts[0]!.id, grades: terminalGrades(snapshot.quizAttempts[0]!, 3) });
+    assert.equal(snapshot.course.currentStage, "remediation");
+    assert.equal(snapshot.quizAttempts[0]!.score, 4);
+    const repeated = quizQuestions("새 시도");
+    repeated[0]!.prompt = firstQuestions[0]!.prompt;
+    assert.throws(() => startRemediationQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, remediationMarkdown: "틀린 개념을 다른 예제로 다시 설명한다.", questions: repeated }), LearningValidationError);
+    snapshot = startRemediationQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, remediationMarkdown: "틀린 개념을 다른 예제로 다시 설명한다.", questions: quizQuestions("새 시도") });
+    assert.equal(snapshot.course.currentStage, "quiz");
+    assert.equal(snapshot.quizAttempts[1]!.attemptNumber, 2);
+    snapshot = gradeQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, attemptId: snapshot.quizAttempts[1]!.id, grades: terminalGrades(snapshot.quizAttempts[1]!) });
+    assert.equal(snapshot.course.currentStage, "reflection");
+    assert.equal(snapshot.remediationConcepts.length, 0);
+    assert.ok(snapshot.understoodConcepts.some(({ key }) => key === "concept-3"));
+  });
+});
+
+test("rejects invalid grade submissions without recording a response", () => {
+  withDataRoot((dataRoot, db) => {
+    let snapshot = readyForQuiz(db, dataRoot);
+    snapshot = startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, questions: quizQuestions("invalid") });
+    const attempt = snapshot.quizAttempts[0]!;
+    const invalid: Parameters<typeof gradeQuiz>[2] = { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, attemptId: attempt.id, grades: [{ ...terminalGrades(attempt)[0]!, result: "needs_clarification" }] };
+    assert.throws(() => gradeQuiz(db, dataRoot, invalid), LearningValidationError);
+    invalid.grades = [null as unknown as QuestionGradeInput];
+    assert.throws(() => gradeQuiz(db, dataRoot, invalid), LearningValidationError);
+    const after = getLearningSnapshot(db, dataRoot, snapshot.course.id)!;
+    assert.equal(after.course.revision, snapshot.course.revision);
+    assert.ok(after.quizAttempts[0]!.questions.every(({ responses }) => responses.length === 0));
+  });
+});
+
+test("retains five questions and every response after reopening", () => {
+  withDataRoot((dataRoot, db) => {
+    let snapshot = readyForQuiz(db, dataRoot);
+    snapshot = startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, questions: quizQuestions("resume") });
+    const attempt = snapshot.quizAttempts[0]!;
+    snapshot = gradeQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, attemptId: attempt.id, grades: [terminalGrades(attempt)[0]!] });
+    db.close();
+    const reopened = openDatabase(dataRoot);
+    try {
+      const resumed = getLearningSnapshot(reopened, dataRoot, snapshot.course.id)!;
+      assert.equal(resumed.quizAttempts[0]!.questions.length, 5);
+      assert.equal(resumed.quizAttempts[0]!.questions[0]!.responses.length, 1);
+      assert.ok(resumed.quizAttempts[0]!.questions.slice(1).every(({ responses }) => responses.length === 0));
+    } finally { reopened.close(); }
+  });
+});
+
+test("quiz creation requires daily research, all lesson parts, unique normalized prompts, and current revision", () => {
+  withDataRoot((dataRoot, db) => {
+    let snapshot = activateCourse(db, dataRoot);
+    assert.throws(() => startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, questions: quizQuestions("early") }), LearningStateError);
+    snapshot = recordDailyResearch(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, research: dailyResearch(1) });
+    assert.throws(() => startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, questions: quizQuestions("incomplete") }), LearningStateError);
+    snapshot = saveLearningCheckpoint(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, lesson: { recallMarkdown: "a", preciseExplanationMarkdown: "b", eli5Markdown: "c", analogyMarkdown: "d", exampleMarkdown: "e", applicationMarkdown: "f", interviewMarkdown: "g" }, understoodConcepts: [], remediationConcepts: [] });
+    const duplicate = quizQuestions("normalized prompt");
+    duplicate[1]!.prompt = `  ${duplicate[0]!.prompt}  `;
+    assert.throws(() => startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, questions: duplicate }), LearningValidationError);
+    assert.throws(() => startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision - 1, questions: quizQuestions("stale") }), LearningRevisionConflictError);
+  });
+});
+
+test("persists a partial quiz answer and reopens at the unanswered question set", () => {
+  withDataRoot((dataRoot, db) => {
+    let snapshot = readyForQuiz(db, dataRoot);
+    snapshot = startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, questions: quizQuestions("partial") });
+    const attempt = snapshot.quizAttempts[0]!;
+    snapshot = gradeQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, attemptId: attempt.id, grades: [terminalGrades(attempt)[0]!] });
+    assert.equal(snapshot.course.currentStage, "quiz");
+    assert.match(snapshot.documents.progress!, /답변 1\/5/);
+    db.close();
+    const reopened = openDatabase(dataRoot);
+    try {
+      const resumed = getLearningSnapshot(reopened, dataRoot, snapshot.course.id)!;
+      assert.equal(resumed.quizAttempts[0]!.questions[0]!.responses.length, 1);
+      assert.ok(resumed.quizAttempts[0]!.questions.slice(1).every(({ responses }) => responses.length === 0));
+      const completed = gradeQuiz(reopened, dataRoot, { courseId: resumed.course.id, expectedRevision: resumed.course.revision, attemptId: resumed.quizAttempts[0]!.id, grades: terminalGrades(resumed.quizAttempts[0]!).slice(1) });
+      assert.equal(completed.course.currentStage, "reflection");
+      assert.equal(completed.quizAttempts[0]!.score, 5);
+    } finally { reopened.close(); }
+  });
+});
+
+test("reopens at remediation with the failed attempt intact", () => {
+  withDataRoot((dataRoot, db) => {
+    let snapshot = readyForQuiz(db, dataRoot);
+    snapshot = startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, questions: quizQuestions("restart") });
+    snapshot = gradeQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, attemptId: snapshot.quizAttempts[0]!.id, grades: terminalGrades(snapshot.quizAttempts[0]!, 2) });
+    snapshot = saveLearningCheckpoint(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, lesson: { remediationMarkdown: "틀린 개념을 새 비유로 설명하다가 체크포인트를 저장했다." } });
+    db.close();
+    const reopened = openDatabase(dataRoot);
+    try {
+      const resumed = getLearningSnapshot(reopened, dataRoot, snapshot.course.id)!;
+      assert.equal(resumed.course.currentStage, "remediation");
+      assert.equal(resumed.quizAttempts[0]!.status, "failed");
+      assert.equal(resumed.quizAttempts[0]!.score, 4);
+      assert.match(resumed.documents.currentDay!, /새 비유로 설명하다가 체크포인트/);
+      assert.deepEqual(resumed.remediationConcepts, [{ key: "concept-2", label: "개념 2" }]);
+    } finally { reopened.close(); }
+  });
+});
+
+test("rejects an attempt that belongs to another active course", () => {
+  withDataRoot((dataRoot, db) => {
+    let first = readyForQuiz(db, dataRoot), second = readyForQuiz(db, dataRoot);
+    first = startQuiz(db, dataRoot, { courseId: first.course.id, expectedRevision: first.course.revision, questions: quizQuestions("first") });
+    second = startQuiz(db, dataRoot, { courseId: second.course.id, expectedRevision: second.course.revision, questions: quizQuestions("second") });
+    assert.throws(() => gradeQuiz(db, dataRoot, { courseId: first.course.id, expectedRevision: first.course.revision, attemptId: second.quizAttempts[0]!.id, grades: terminalGrades(second.quizAttempts[0]!) }), LearningStateError);
+    assert.ok(getLearningSnapshot(db, dataRoot, first.course.id)!.quizAttempts[0]!.questions.every(({ responses }) => responses.length === 0));
+    assert.ok(getLearningSnapshot(db, dataRoot, second.course.id)!.quizAttempts[0]!.questions.every(({ responses }) => responses.length === 0));
+  });
+});
+
+test("quiz grading COMMIT failure restores responses, stage, and progress", () => {
+  withDataRoot((dataRoot, db) => {
+    let snapshot = readyForQuiz(db, dataRoot);
+    snapshot = startQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, questions: quizQuestions("rollback") });
+    const beforeProgress = snapshot.documents.progress;
+    db.exec(`CREATE TABLE quiz_commit_parent (id INTEGER PRIMARY KEY); CREATE TABLE quiz_commit_gate (course_id TEXT NOT NULL, missing_parent INTEGER NOT NULL, FOREIGN KEY (missing_parent) REFERENCES quiz_commit_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_quiz_commit AFTER UPDATE OF revision ON courses BEGIN INSERT INTO quiz_commit_gate VALUES (NEW.id, 1); END;`);
+    assert.throws(() => gradeQuiz(db, dataRoot, { courseId: snapshot.course.id, expectedRevision: snapshot.course.revision, attemptId: snapshot.quizAttempts[0]!.id, grades: [terminalGrades(snapshot.quizAttempts[0]!)[0]!] }), /FOREIGN KEY constraint failed/);
+    const after = getLearningSnapshot(db, dataRoot, snapshot.course.id)!;
+    assert.equal(after.course.revision, snapshot.course.revision);
+    assert.equal(after.course.currentStage, "quiz");
+    assert.equal(after.quizAttempts[0]!.score, null);
+    assert.ok(after.quizAttempts[0]!.questions.every(({ responses }) => responses.length === 0));
+    assert.equal(after.documents.progress, beforeProgress);
   });
 });
