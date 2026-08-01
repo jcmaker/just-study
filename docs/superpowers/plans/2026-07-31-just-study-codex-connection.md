@@ -620,7 +620,16 @@ export async function POST(request: Request): Promise<Response> {
 }
 ```
 
-Do not export `GET`, `DELETE`, or `OPTIONS`; Next returns 405 without entering this module's MCP path. Do not add CORS headers.
+Do not export `GET`, `DELETE`, or `OPTIONS`; Next handles them without entering this module's MCP path. Do not add CORS headers.
+
+> **ERRATUM (2026-08-02, Task 8 프리플라이트 실측):** 이 문단의 원문은 세 메서드
+> 모두 405를 반환한다고 적었으나 실측은 다르다. `GET`과 `DELETE`는 405지만
+> **`OPTIONS`는 Next.js App Router가 자동 구현해 `204 No Content` +
+> `allow: OPTIONS, POST`를 반환한다.** `Access-Control-Allow-Origin`은 어느
+> 응답에도 없으므로 브라우저 교차 출처 요청은 프리플라이트 단계에서 차단되고,
+> 비브라우저 MCP 클라이언트는 OPTIONS를 보내지 않는다. 보안 영향 없음.
+> `tests/mcp.test.ts`의 `"exports only POST for the MCP route"`가 이 무-OPTIONS
+> 설계를 의도적으로 고정하고 있으므로 **코드를 바꾸지 않는다.**
 
 - [ ] **Step 4: Add the trusted-project MCP config**
 
@@ -2277,7 +2286,9 @@ First verify that the running Next route, not only the imported module, rejects 
 ```bash
 test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/mcp)" = 405
 test "$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE http://127.0.0.1:3000/mcp)" = 405
-test "$(curl -sS -o /dev/null -w '%{http_code}' -X OPTIONS http://127.0.0.1:3000/mcp)" = 405
+# ERRATUM (2026-08-02): 원문은 405였으나 실측은 204다. Next가 미정의 OPTIONS를
+# 자동 구현한다. CORS 헤더는 없으므로 보안 영향 없음. 위 Task 1 Step 3의 정정 참조.
+test "$(curl -sS -o /dev/null -w '%{http_code}' -X OPTIONS http://127.0.0.1:3000/mcp)" = 204
 test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Host: evil.test' -H 'Content-Type: application/json' --data '{}' http://127.0.0.1:3000/mcp)" = 403
 test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Origin: http://evil.test' -H 'Content-Type: application/json' --data '{}' http://127.0.0.1:3000/mcp)" = 403
 curl -sS -D "$justStudyTranscriptRoot/local-headers.txt" -o /dev/null -H 'Content-Type: application/json' --data '{}' http://127.0.0.1:3000/mcp
