@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { createCourse } from "../src/server/courses.ts";
@@ -32,6 +32,17 @@ import {
   startQuiz,
 } from "../src/server/learning.ts";
 import { renderApprovedCourseMarkdown } from "../src/server/learning-markdown.ts";
+import {
+  applyTheme,
+  DEFAULT_THEME,
+  normalizeTheme,
+  THEMES,
+  THEME_BOOTSTRAP_SCRIPT,
+  THEME_LABELS,
+  THEME_STORAGE_KEY,
+  themeAttributes,
+} from "../src/app/theme.ts";
+import { NAV_ITEMS, isActiveNav } from "../src/app/nav-items.ts";
 
 function makeDataRoot(): string {
   return mkdtempSync(join(tmpdir(), "just-study-dashboard-"));
@@ -729,4 +740,109 @@ test("parser keeps every malformed-table cell as literal text", () => {
     type: "paragraph",
     inline: [{ type: "text", value: "| 이름 | 점수 | | --- | --- | | 자료 | 94 | 보존 |" }],
   }]);
+});
+
+test("theme values are validated and default to focus", () => {
+  assert.deepEqual([...THEMES], ["focus", "calm", "focus-dark"]);
+  assert.equal(DEFAULT_THEME, "focus");
+  assert.equal(THEME_STORAGE_KEY, "just-study:theme");
+  assert.deepEqual(Object.keys(THEME_LABELS).sort(), ["calm", "focus", "focus-dark"]);
+  for (const theme of THEMES) assert.equal(normalizeTheme(theme), theme);
+  for (const value of [undefined, null, "", "dark", "FOCUS", "focus ", 3, {}, ["calm"]]) {
+    assert.equal(normalizeTheme(value), "focus");
+  }
+});
+
+test("theme attributes map focus-dark to the dark class and color scheme", () => {
+  assert.deepEqual(themeAttributes("focus"), { theme: "focus", dark: false, colorScheme: "light" });
+  assert.deepEqual(themeAttributes("calm"), { theme: "calm", dark: false, colorScheme: "light" });
+  assert.deepEqual(themeAttributes("focus-dark"), { theme: "focus-dark", dark: true, colorScheme: "dark" });
+});
+
+test("applyTheme writes exactly the documented DOM state", () => {
+  const classes = new Set<string>();
+  const attributes = new Map<string, string>();
+  const root = {
+    dataset: {} as Record<string, string>,
+    style: { colorScheme: "" },
+    classList: {
+      add: (name: string) => { classes.add(name); },
+      remove: (name: string) => { classes.delete(name); },
+    },
+    setAttribute: (name: string, value: string) => { attributes.set(name, value); },
+  };
+
+  applyTheme("focus-dark", root as never);
+  assert.equal(attributes.get("data-theme"), "focus-dark");
+  assert.equal(classes.has("dark"), true);
+  assert.equal(root.style.colorScheme, "dark");
+
+  applyTheme("calm", root as never);
+  assert.equal(attributes.get("data-theme"), "calm");
+  assert.equal(classes.has("dark"), false);
+  assert.equal(root.style.colorScheme, "light");
+});
+
+test("the bootstrap script is self-contained, synchronous, and fails closed to focus", () => {
+  assert.equal(THEME_BOOTSTRAP_SCRIPT.includes(THEME_STORAGE_KEY), true);
+  for (const theme of THEMES) assert.equal(THEME_BOOTSTRAP_SCRIPT.includes(theme), true);
+  assert.equal(/try\s*\{/.test(THEME_BOOTSTRAP_SCRIPT), true);
+  assert.equal(/catch/.test(THEME_BOOTSTRAP_SCRIPT), true);
+  assert.equal(THEME_BOOTSTRAP_SCRIPT.includes("fetch("), false);
+  assert.equal(THEME_BOOTSTRAP_SCRIPT.includes("import"), false);
+  assert.equal(THEME_BOOTSTRAP_SCRIPT.includes("</script"), false);
+  assert.equal(THEME_BOOTSTRAP_SCRIPT.length < 700, true);
+  assert.match(THEME_BOOTSTRAP_SCRIPT, /catch\(e\)\{[^}]*setAttribute\("data-theme","focus"\)[^}]*colorScheme="light"/);
+});
+
+test("globals.css defines every semantic and chart token for all three themes", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "../src/app/globals.css"), "utf8");
+  const tokens = [
+    "--background", "--foreground", "--card", "--card-foreground", "--popover", "--popover-foreground",
+    "--primary", "--primary-foreground", "--secondary", "--secondary-foreground", "--muted",
+    "--muted-foreground", "--accent", "--accent-foreground", "--destructive", "--destructive-foreground",
+    "--border", "--input", "--ring", "--sidebar", "--sidebar-foreground", "--sidebar-primary",
+    "--sidebar-primary-foreground", "--sidebar-accent", "--sidebar-accent-foreground",
+    "--sidebar-border", "--sidebar-ring", "--radius-sm", "--radius-md", "--radius-lg", "--radius-xl",
+  ];
+  for (const [name, pattern] of [
+    ["focus", /:root,\s*\[data-theme="focus"\]\s*\{([^}]*)\}/],
+    ["calm", /\[data-theme="calm"\]\s*\{([^}]*)\}/],
+    ["focus-dark", /\[data-theme="focus-dark"\]\s*\{([^}]*)\}/],
+  ] as const) {
+    const block = pattern.exec(css)?.[1];
+    assert.ok(block, `globals.css has no ${name} token block`);
+    for (const token of tokens) {
+      assert.match(block, new RegExp(`${token}\\s*:`), `${name} is missing ${token}`);
+    }
+  }
+  assert.equal((css.match(/--chart-1\s*:/g) ?? []).length, 3);
+  assert.equal((css.match(/--chart-5\s*:/g) ?? []).length, 3);
+  assert.equal(css.includes("calc(var(--radius)"), false);
+  assert.equal(css.includes("--font-sans: var(--font-sans);"), false);
+  assert.equal(css.includes("/ 2.50)"), false);
+  assert.match(css, /--course-accent-0\s*:/);
+  assert.match(css, /--course-accent-5\s*:/);
+  assert.match(css, /prefers-reduced-motion/);
+  for (const helper of ["bw", "bw-b", "bw-t", "bw-r", "radius-sm", "radius-md", "radius-lg", "shadow-token", "outline-selected", "tap-target", "sr-only"]) {
+    assert.match(css, new RegExp(`@utility ${helper}\\s*\\{`), `globals.css is missing @utility ${helper}`);
+  }
+  assert.match(css, /\.surface\s*\{/);
+  assert.equal(css.includes(".bw {"), false);
+});
+
+test("navigation exposes exactly Today, Courses, and Settings", () => {
+  assert.deepEqual(NAV_ITEMS.map(({ href }) => href), ["/", "/courses", "/settings"]);
+  assert.deepEqual(NAV_ITEMS.map(({ label }) => label), ["오늘", "과정", "설정"]);
+  assert.equal(NAV_ITEMS.every(({ label }) => label.length > 0), true);
+});
+
+test("active navigation matches the section, not a prefix accident", () => {
+  assert.equal(isActiveNav("/", "/"), true);
+  assert.equal(isActiveNav("/courses", "/"), false);
+  assert.equal(isActiveNav("/courses", "/courses"), true);
+  assert.equal(isActiveNav("/courses/11111111-1111-4111-8111-111111111111", "/courses"), true);
+  assert.equal(isActiveNav("/coursesomething", "/courses"), false);
+  assert.equal(isActiveNav("/settings", "/settings"), true);
+  assert.equal(isActiveNav("/status", "/settings"), false);
 });

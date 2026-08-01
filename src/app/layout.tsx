@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
-import Link from "next/link.js";
 import type { ReactNode } from "react";
 
 import "./globals.css";
+import { AppShell } from "./app-shell.tsx";
+import { DEFAULT_THEME, THEME_BOOTSTRAP_SCRIPT } from "./theme.ts";
 
 export const metadata: Metadata = {
   title: "just-study",
@@ -13,18 +14,12 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="ko">
+    <html lang="ko" data-theme={DEFAULT_THEME} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} />
+      </head>
       <body>
-        <header>
-          <Link className="brand" href="/">
-            just-study
-          </Link>
-          <nav aria-label="주요 메뉴">
-            <Link href="/">과정</Link>
-            <Link href="/status">상태</Link>
-          </nav>
-        </header>
-        <main>{children}</main>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

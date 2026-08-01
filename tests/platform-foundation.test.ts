@@ -1440,11 +1440,14 @@ test("UI layout renders Korean language and semantic navigation", async () => {
     ),
   );
 
-  assert.match(html, /^<html lang="ko">/);
+  assert.match(html, /^<html lang="ko" data-theme="focus">/);
+  assert.match(html, /just-study:theme/);
   assert.match(html, /<nav aria-label="주요 메뉴">/);
-  assert.match(html, /href="\/">과정<\/a>/);
-  assert.match(html, /href="\/status">상태<\/a>/);
-  assert.match(html, /<main>.*본문.*<\/main>/);
+  assert.match(html, /href="\/">(?:<span[^>]*><\/span>)?오늘<\/a>/);
+  assert.match(html, /href="\/courses">(?:<span[^>]*><\/span>)?과정<\/a>/);
+  assert.match(html, /href="\/settings">(?:<span[^>]*><\/span>)?설정<\/a>/);
+  assert.equal(html.includes('href="/status"'), false);
+  assert.match(html, /<main[^>]*>.*본문.*<\/main>/);
 });
 
 function makeCourseFormData(
@@ -1660,7 +1663,7 @@ test("UI status renders an uninitialized schema as initialization pending", asyn
 
   try {
     const html = renderToStaticMarkup(createElement(StatusPage));
-    assert.match(html, /<dt>스키마<\/dt><dd>초기화 전<\/dd>/);
+    assert.match(html, /<dt class="text-muted-foreground">스키마<\/dt><dd>초기화 전<\/dd>/);
     assert.equal(html.includes("읽기 실패"), false);
   } finally {
     clearTestRuntime();
@@ -1718,7 +1721,7 @@ test("UI status explains healthy and recovery-needed states with all counts", as
     assert.match(inconsistent, /확인 필요/);
     assert.match(inconsistent, /저장 데이터가 일치하지 않습니다/);
     for (const label of ["고아 과정", "누락 과정", "손상 과정", "임시 항목"]) {
-      assert.match(inconsistent, new RegExp(`<dt>${label}</dt><dd>1개</dd>`));
+      assert.match(inconsistent, new RegExp(`<dt class="text-muted-foreground">${label}</dt><dd>1개</dd>`));
     }
 
     db.close();
