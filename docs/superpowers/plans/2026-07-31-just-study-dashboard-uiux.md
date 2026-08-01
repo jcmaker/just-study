@@ -12,6 +12,7 @@
 
 - Read `docs/superpowers/specs/2026-07-31-just-study-dashboard-uiux-design.md` before each task and do not expand its scope.
 - Work only in the clean integration worktree. Never touch the user's uncommitted `tsconfig.json`, `next-env.d.ts`, or documents in the original checkout.
+- The integration baseline already contains generated `next-env.d.ts`, `tsconfig.json`, and `tsconfig.tsbuildinfo` changes from the baseline build. Record them as baseline artifacts, never stage or commit them, and do not let them obscure a task diff.
 - No login, signup, account, profile, organization menu, OAuth, session, token, CORS, or non-`127.0.0.1` binding.
 - The server never calls an LLM or a web search API.
 - SQLite is the source of truth for course/Day/stage/quiz/source scores. Markdown is the source of truth for long prose. Never reverse-parse Markdown to derive status, progress, source scores, or quiz results.
@@ -30,10 +31,15 @@
 
 Four points where this plan resolves an ambiguity in the approved design. Any reviewer should judge the implementation against these resolutions. Each was reviewed independently; the chart-token question was originally resolved the other way and reversed after review.
 
-1. **shadcn/ui is used as a source of component shape, not as a dependency.** The design allows Button, Card, Badge, Progress, Tabs, Sheet, Select, Tooltip, Skeleton, Alert, and DropdownMenu but instructs to "copy only what the real screens need". After mapping every screen, no screen needs a Radix primitive: tabs are real links (the design requires link semantics and `aria-current`), the theme picker is a native radio group (the design requires it), metric explanations use visible helper text (the design allows "보조 텍스트 또는 tooltip"), and the new-course panel is a native `<dialog>` which supplies focus trapping, `Escape`, and inert background from the platform. Therefore Radix, `class-variance-authority`, `clsx`, `tailwind-merge`, and the shadcn CLI are **not** installed. Local components in `src/app/ui/` reproduce the new-york shapes with semantic tokens only. This follows the design's own "필요한 항목만" rule and the project-wide ban on unnecessary dependencies.
+1. **shadcn/ui is used as a source of component shape, not as a dependency.** The design allows Button, Card, Badge, Progress, Tabs, Sheet, Select, Tooltip, Skeleton, Alert, and DropdownMenu but instructs to "copy only what the real screens need". After mapping every screen, no screen needs a Radix primitive: tabs are real links (the design requires link semantics and `aria-current`), the theme picker is a native radio group (the design requires it), metric explanations use visible helper text (the design allows "보조 텍스트 또는 tooltip"), and the new-course panel is a native `<dialog>` which supplies focus trapping, `Escape`, and inert background from the platform. Therefore Radix, `class-variance-authority`, `clsx`, `tailwind-merge`, and the shadcn CLI are **not** installed. Local components in `src/app/ui/` reproduce the new-york shapes with semantic tokens only. Add Radix only when a concrete native accessibility behavior cannot be met and the root coordinator approves that measured need. This follows the design's own "필요한 항목만" rule and the project-wide ban on unnecessary dependencies.
 2. **`--chart-1` … `--chart-5` are kept verbatim.** An earlier draft of this plan dropped them as unused scaffolding. That was wrong: the design states plainly "sidebar, chart, destructive, input와 ring 토큰도 첨부 값 그대로 사용한다", so they are part of a token set the design ordered copied, not speculative scaffolding for an unbuilt feature. Focus and Focus Dark use the attachment's exact values; Calm gets a matching muted set. No chart library is added and no component consumes them.
 3. **Waiting-quiz outranks draft in the attention list.** The design's table orders `remediation`, `reflection`, quiz-with-response, quiz-without-response, `draft`, `lecture`, but its prose sort sentence omits quiz-without-response entirely. This plan follows the table order, so a Day whose quiz is saved but unanswered is surfaced before a draft awaiting outline approval — an in-flight Day is a more urgent next action than a course that has not started.
 4. **`--border` is a single token that must reach 3:1 contrast against `--background` in every theme.** The attachment's `--input` is white in Focus and therefore cannot be a border color; it is treated as the input *background*. Form controls and cards use `--border`. Focus (black on white) and Focus Dark (white on black) are 21:1; the Calm value below is fixed at 3.21:1.
+5. **Accessibility scanning is external to the application.** Task 13 uses an axe scan supplied by the browser/verification environment. Do not add an application or dev dependency solely to run axe.
+
+## Binding Execution Order
+
+Implement in this order: Tasks 1 → 2 → 3 → 4 → the single combined Tasks 5/6 batch → Task 10's service/action boundary → 7 → 8 → 9 → Task 10's remaining UI → 11 → 12 → 13 → 14. Only read-only QA may overlap source implementation. The combined Tasks 5/6 batch and every later implementation batch end only after a passing `npx tsc --noEmit`.
 
 ## File Structure
 
@@ -53,6 +59,7 @@ Four points where this plan resolves an ambiguity in the approved design. Any re
 - `src/app/theme-picker.tsx` — `"use client"` native radio group.
 - `src/app/new-course-panel.tsx` — `"use client"` native `<dialog>` wrapper around the existing course form.
 - `src/app/action-state.ts` — form-state types and initial values, kept out of the `"use server"` module.
+- `src/app/error-messages.ts` — server-only Korean error mapping for actions; never imported by a client component.
 - `src/app/draft-form.tsx` — `"use client"` draft title/goal editor.
 - `src/app/reflection-form.tsx` — `"use client"` three-answer reflection editor.
 - `src/app/courses/page.tsx` — course list with filter.
@@ -1306,6 +1313,7 @@ Append to `tests/dashboard.test.ts`:
 
 ```ts
 import { parseMarkdown, type MarkdownBlock } from "../src/server/markdown.ts";
+import { renderApprovedCourseMarkdown } from "../src/server/learning-markdown.ts";
 
 test("parser keeps raw HTML as literal text", () => {
   const blocks = parseMarkdown("<script>alert(1)</script>\n\n<img src=x onerror=y>");
@@ -1437,6 +1445,34 @@ test("parser treats a fenced block as literal even when it contains Markdown", (
     { type: "code", language: null, value: "# 제목\n- 목록" },
   ]);
 });
+
+test("parser preserves escaped pipes from generated learning documents", () => {
+  const generated = renderApprovedCourseMarkdown(
+    { title: "파이프", goal: "파이프를 안전하게 읽는다." } as never,
+    {
+      courseId: "11111111-1111-4111-8111-111111111111",
+      expectedRevision: 0,
+      priorKnowledge: "기초 | 표",
+      learningPreference: "examples",
+      knowledgeMapMarkdown: "기초 → 적용",
+      research: {
+        ...research("파이프", ["https://pipes.example.edu/a", "https://pipes.example.org/b"]),
+        sources: [{
+          ...research("파이프", ["https://pipes.example.edu/a", "https://pipes.example.org/b"]).sources[0]!,
+          title: "제목 | 파이프",
+          selectionReason: "이유 | 추가",
+        }],
+      },
+      days: Array.from({ length: 30 }, (_, index) => ({ objective: `목표 | ${index + 1}` })),
+    },
+  );
+
+  assert.equal(generated.includes("제목 \\| 파이프"), true);
+  const text = JSON.stringify(parseMarkdown(generated));
+  assert.equal(text.includes("제목 | 파이프"), true);
+  assert.equal(text.includes("이유 | 추가"), true);
+  assert.equal(text.includes("목표 | 1"), true);
+});
 ```
 
 - [ ] **Step 2: Run the focused test and observe RED**
@@ -1534,7 +1570,24 @@ export function parseInline(source: string): MarkdownInline[] {
 
 function tableCells(line: string): string[] {
   const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  return trimmed.split("|").map((cell) => cell.trim());
+  const cells: string[] = [];
+  let cell = "";
+  let escaped = false;
+  for (const character of trimmed) {
+    if (escaped) {
+      cell += character === "|" ? "|" : `\\${character}`;
+      escaped = false;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if (character === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  cells.push(`${cell}${escaped ? "\\" : ""}`.trim());
+  return cells;
 }
 
 function alignmentOf(cell: string): MarkdownAlignment | null {
@@ -1677,7 +1730,7 @@ git add src/server/markdown.ts tests/dashboard.test.ts
 git commit -m "feat: parse learning Markdown without raw HTML"
 ```
 
-### Task 5: Tailwind v4, three themes, and flash-free theme bootstrap
+### Combined Tasks 5/6: Tailwind v4, themes, shell, navigation, and Settings
 
 **Files:**
 
@@ -1770,6 +1823,7 @@ test("the bootstrap script is self-contained, synchronous, and fails closed to f
   assert.equal(THEME_BOOTSTRAP_SCRIPT.includes("import"), false);
   assert.equal(THEME_BOOTSTRAP_SCRIPT.includes("</script"), false);
   assert.equal(THEME_BOOTSTRAP_SCRIPT.length < 700, true);
+  assert.match(THEME_BOOTSTRAP_SCRIPT, /catch\(e\)\{[^}]*setAttribute\("data-theme","focus"\)[^}]*colorScheme="light"/);
 });
 
 test("globals.css defines every semantic token for all three themes and no chart token", () => {
@@ -1854,10 +1908,10 @@ export function applyTheme(value: unknown, root: HTMLElement): void {
   root.style.colorScheme = colorScheme;
 }
 
-export const THEME_BOOTSTRAP_SCRIPT = `(function(){try{var t=localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)});var a=${JSON.stringify(THEMES)};if(a.indexOf(t)<0)t=${JSON.stringify(DEFAULT_THEME)};var r=document.documentElement;r.setAttribute("data-theme",t);r.classList[t===${JSON.stringify(DARK_THEME)}?"add":"remove"]("dark");r.style.colorScheme=t===${JSON.stringify(DARK_THEME)}?"dark":"light";}catch(e){}})();`;
+export const THEME_BOOTSTRAP_SCRIPT = `(function(){var r=document.documentElement;try{var t=localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)});var a=${JSON.stringify(THEMES)};if(a.indexOf(t)<0)t=${JSON.stringify(DEFAULT_THEME)};r.setAttribute("data-theme",t);r.classList[t===${JSON.stringify(DARK_THEME)}?"add":"remove"]("dark");r.style.colorScheme=t===${JSON.stringify(DARK_THEME)}?"dark":"light";}catch(e){r.setAttribute("data-theme",${JSON.stringify(DEFAULT_THEME)});r.classList.remove("dark");r.style.colorScheme="light";}})();`;
 ```
 
-`applyTheme` is written against the small DOM surface the test fakes: `setAttribute`, `classList.add/remove`, and `style.colorScheme`. The bootstrap string is built from the same constants so the two paths cannot diverge.
+`applyTheme` is written against the small DOM surface the test fakes: `setAttribute`, `classList.add/remove`, and `style.colorScheme`. The bootstrap string is built from the same constants so the two paths cannot diverge; its `catch` explicitly reapplies Focus's `data-theme`, removes `dark`, and sets `colorScheme` to `light` when `localStorage` access fails.
 
 - [ ] **Step 5: Add the PostCSS config**
 
@@ -2241,18 +2295,17 @@ export default function RootLayout({
 }
 ```
 
-`suppressHydrationWarning` sits only on `<html>` because the bootstrap script intentionally changes that element before React hydrates. `AppShell` arrives in Task 6; until then this file will not compile, so Tasks 5 and 6 are committed together at the end of Task 6. Complete Task 5 Step 8 first to prove the deterministic contracts.
+`suppressHydrationWarning` sits only on `<html>` because the bootstrap script intentionally changes that element before React hydrates. This is one atomic Tasks 5/6 batch: continue immediately with the shell below and commit only after all theme and shell contracts, including `npx tsc --noEmit`, pass.
 
-- [ ] **Step 8: Run the theme tests**
+- [ ] **Step 8: Run the focused theme test, then continue the same atomic batch**
 
 ```bash
 node --test --test-name-pattern='theme|globals.css' tests/dashboard.test.ts
-npx tsc --noEmit
 ```
 
-Expected: every theme test passes. `tsc` reports only the missing `./app-shell.tsx` module, which Task 6 creates. Do not commit yet.
+Expected: every theme test passes. Do not run a partial-batch typecheck and do not commit yet; the complete batch typecheck belongs after the shell is in place.
 
-### Task 6: App shell, navigation, and Settings
+#### Continue the combined Tasks 5/6 batch: App shell, navigation, and Settings
 
 **Files:**
 
@@ -2268,7 +2321,7 @@ Expected: every theme test passes. `tsc` reports only the missing `./app-shell.t
 
 **Interfaces:**
 
-- Consumes: `THEMES`, `THEME_LABELS`, `THEME_STORAGE_KEY`, `DEFAULT_THEME`, `normalizeTheme`, `applyTheme` from Task 5; `getHealth`/`getRuntime` for the Settings system section.
+- Consumes: `THEMES`, `THEME_LABELS`, `THEME_STORAGE_KEY`, `DEFAULT_THEME`, `normalizeTheme`, `applyTheme` from the theme portion of this batch; `getHealth`/`getRuntime` for the Settings system section.
 - Produces: `AppShell`, `NAV_ITEMS`, `Nav`, `ThemePicker`, `Card`, `CardHeader`, `Badge`, `ProgressBar`, `Alert`, `Skeleton`, `buttonClass`.
 
 - [ ] **Step 1: Write the failing navigation-contract test**
@@ -2477,7 +2530,7 @@ import { Nav } from "./nav.tsx";
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-dvh lg:flex">
+    <div className="min-h-dvh lg:pl-64">
       <a
         href="#main"
         className="absolute left-2 top-2 z-50 -translate-y-20 bg-card text-card-foreground px-3 py-2 bw border-border radius-md focus:translate-y-0"
@@ -2489,7 +2542,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <Link href="/" className="text-base font-extrabold text-sidebar-foreground no-underline">just-study</Link>
       </header>
 
-      <aside className="hidden lg:flex lg:w-64 lg:shrink-0 lg:flex-col lg:gap-6 lg:bw-r lg:border-sidebar-border lg:bg-sidebar lg:p-4">
+      <aside className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:w-64 lg:flex-col lg:gap-6 lg:bw-r lg:border-sidebar-border lg:bg-sidebar lg:p-4">
         <Link href="/" className="text-lg font-extrabold text-sidebar-foreground no-underline">just-study</Link>
         <nav aria-label="주요 메뉴"><Nav layout="sidebar" /></nav>
       </aside>
@@ -2514,34 +2567,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
 Both navigations render the same three items from one definition; only CSS decides which is visible. `tabIndex={-1}` on `<main>` makes the skip link actually move focus in every browser.
 
-`AppShell` takes no extra slot. The design's sub-1024px requirement — "과정 상세에서는
-상단에 뒤로 가기와 현재 Day를 표시한다" — is met by the course route rendering its own
-context bar as its first child, directly beneath the shell header. This keeps
-`layout.tsx` as plain `<AppShell>{children}</AppShell>` with no prop plumbing, no
-parallel routes, and no second layout tree, and it keeps the bar in correct DOM order
-for screen readers.
-
-Create `src/app/courses/[id]/context-bar.tsx` (a server component; it needs no browser state):
-
-```tsx
-import Link from "next/link.js";
-
-export function CourseContextBar({ title, dayLabel }: { title: string; dayLabel: string | null }) {
-  return (
-    <div className="-mx-4 mb-4 flex min-w-0 items-center gap-3 bw-b border-sidebar-border bg-sidebar px-4 py-2 lg:hidden">
-      <Link href="/courses" className="tap-target inline-flex shrink-0 items-center px-2 text-sm text-sidebar-foreground no-underline">
-        <span aria-hidden="true">←</span>
-        <span className="ml-1">과정</span>
-      </Link>
-      <span className="min-w-0 flex-1 truncate text-sm font-bold text-sidebar-foreground">{title}</span>
-      {dayLabel ? <span className="shrink-0 text-xs text-sidebar-foreground">{dayLabel}</span> : null}
-    </div>
-  );
-}
-```
-
-Task 9 renders it as the first element of the course page and hides the desktop
-breadcrumb on mobile, so the two never both appear.
+The desktop sidebar is fixed at `>=1024px`; the outer `lg:pl-64` reserves its width, so main content never renders underneath it. Task 9 creates the route-specific mobile context bar where it is first used.
 
 - [ ] **Step 5: Implement the theme picker and Settings**
 
@@ -2672,9 +2698,9 @@ git diff --check
 git status --short
 ```
 
-Expected: all pass and the build emits `/settings`. `git status` may show regenerated `tsconfig.json`, `next-env.d.ts`, and `tsconfig.tsbuildinfo`; inspect each diff and leave them unstaged.
+Expected: all pass and the build emits `/settings`. `git status` may show the pre-existing generated baseline artifacts `tsconfig.json`, `next-env.d.ts`, and `tsconfig.tsbuildinfo`; inspect each diff and leave them unstaged.
 
-- [ ] **Step 8: Commit Tasks 5 and 6 together**
+- [ ] **Step 8: Commit the single combined Tasks 5/6 batch**
 
 ```bash
 git add package.json package-lock.json postcss.config.mjs src/app/theme.ts src/app/globals.css src/app/layout.tsx src/app/app-shell.tsx src/app/nav-items.ts src/app/nav.tsx src/app/ui/primitives.tsx src/app/theme-picker.tsx src/app/settings/page.tsx src/app/status/page.tsx src/app/not-found.tsx tests/dashboard.test.ts
@@ -2692,7 +2718,7 @@ git commit -m "feat: add the themed dashboard shell"
 
 **Interfaces:**
 
-- Consumes: `getDashboardOverview` (Task 1); `resumeCourse`, `attentionItems`, `courseCardModel`, `RESUME_COMMAND`, `STAGE_LABELS` (Task 3); `Card`, `CardHeader`, `Badge`, `ProgressBar`, `Alert`, `buttonClass` (Task 6).
+- Consumes: `getDashboardOverview` (Task 1); `resumeCourse`, `attentionItems`, `courseCardModel`, `RESUME_COMMAND`, `STAGE_LABELS` (Task 3); `Card`, `CardHeader`, `Badge`, `ProgressBar`, `Alert`, `buttonClass` (combined Tasks 5/6).
 - Produces: `CopyCommand`, `CourseCard`, and the Today route.
 
 The order on the page is fixed by the design: context, resume card, attention, metrics, course cards, recent Days.
@@ -2966,7 +2992,20 @@ export default function TodayPage() {
     );
   }
 
-  const overview = getDashboardOverview(runtime.db);
+  let overview: ReturnType<typeof getDashboardOverview>;
+  try {
+    overview = getDashboardOverview(runtime.db);
+  } catch {
+    return (
+      <>
+        <h1 className="mt-0 mb-2 text-3xl font-extrabold">오늘</h1>
+        <Alert title="학습 데이터를 불러올 수 없습니다." tone="danger">
+          <p className="mt-0 mb-2">데이터베이스를 읽는 중 문제가 발생했습니다. 저장된 학습 기록은 변경되지 않았습니다.</p>
+          <Link href="/status" className="underline">상태 화면에서 복구 방법 확인하기</Link>
+        </Alert>
+      </>
+    );
+  }
   const resume = resumeCardModel(overview.courses);
   const attention = attentionItems(overview.courses);
   const { totals, recentDays } = overview;
@@ -3301,7 +3340,20 @@ export default async function CoursesPage({
     );
   }
 
-  const { courses } = getDashboardOverview(runtime.db);
+  let courses: ReturnType<typeof getDashboardOverview>["courses"];
+  try {
+    ({ courses } = getDashboardOverview(runtime.db));
+  } catch {
+    return (
+      <>
+        <h1 className="mt-0 mb-2 text-3xl font-extrabold">과정</h1>
+        <Alert title="과정 목록을 불러올 수 없습니다." tone="danger">
+          <p className="mt-0 mb-2">데이터베이스를 읽는 중 문제가 발생했습니다. 저장된 과정이 없는 것이 아니라 읽지 못한 상태입니다.</p>
+          <Link href="/status" className="underline">상태 화면에서 복구 방법 확인하기</Link>
+        </Alert>
+      </>
+    );
+  }
   const visible = filterCourses(courses, filter);
   const empty = coursesEmptyState(courses.length, visible.length, filter);
 
@@ -3377,13 +3429,14 @@ git commit -m "feat: browse and filter saved courses"
 **Files:**
 
 - Create: `src/app/ui/markdown-view.tsx`
+- Create: `src/app/courses/[id]/context-bar.tsx`
 - Create: `src/app/courses/[id]/tabs.tsx`
 - Modify: `src/app/courses/[id]/page.tsx` (full replacement)
 - Modify: `tests/dashboard.test.ts`
 
 **Interfaces:**
 
-- Consumes: `getCourseHistory` (Task 2), `getLearningSnapshot`, `parseMarkdown` (Task 4), `normalizeTab`, `COURSE_TABS`, `COURSE_TAB_LABELS`, `STAGE_LABELS`, `courseCardModel`, `RESUME_COMMAND`, and the Task 6 primitives.
+- Consumes: `getCourseHistory` (Task 2), `getLearningSnapshot`, `parseMarkdown` (Task 4), `normalizeTab`, `COURSE_TABS`, `COURSE_TAB_LABELS`, `STAGE_LABELS`, `courseCardModel`, `RESUME_COMMAND`, and the combined Tasks 5/6 primitives.
 - Produces: `MarkdownView`, `CourseTabs`, the six panel components, and the `/courses/[id]` route.
 
 The page reads structured history first, which never touches Markdown, and then tries the Markdown-backed snapshot separately so a checksum failure hides only the prose.
@@ -3416,12 +3469,7 @@ Also append the deterministic corruption contract the page depends on. Add
 `writeFileSync` to the `node:fs` import, and `StorageError` from
 `../src/server/storage.ts`.
 
-`src/server/storage.ts:66` currently declares `class StorageError extends Error {}`
-without `export`, and the subclass sets no `name`, so `new StorageError().name` is
-`"Error"` and a name-based assertion cannot work. Phase 3 Task 1 adds the `export`
-keyword. If Phase 3 has not run when this task starts, make the one-word change here
-as part of this task — add `export` to that single declaration and change nothing else
-in `storage.ts` — and note it in the commit message.
+`StorageError` is already exported by the existing storage module. Import it directly; do not make a conditional export change or modify `src/server/storage.ts` in this task.
 
 ```ts
 test("a damaged document breaks only the prose read, never the structured history", () => {
@@ -3940,6 +3988,27 @@ export function QuizPanel({ history }: { history: CourseHistory }) {
 
 - [ ] **Step 6: Replace `src/app/courses/[id]/page.tsx`**
 
+First create `src/app/courses/[id]/context-bar.tsx` (a server component; it needs no browser state):
+
+```tsx
+import Link from "next/link.js";
+
+export function CourseContextBar({ title, dayLabel }: { title: string; dayLabel: string | null }) {
+  return (
+    <div className="-mx-4 mb-4 flex min-w-0 items-center gap-3 bw-b border-sidebar-border bg-sidebar px-4 py-2 lg:hidden">
+      <Link href="/courses" className="tap-target inline-flex shrink-0 items-center px-2 text-sm text-sidebar-foreground no-underline">
+        <span aria-hidden="true">←</span>
+        <span className="ml-1">과정</span>
+      </Link>
+      <span className="min-w-0 flex-1 truncate text-sm font-bold text-sidebar-foreground">{title}</span>
+      {dayLabel ? <span className="shrink-0 text-xs text-sidebar-foreground">{dayLabel}</span> : null}
+    </div>
+  );
+}
+```
+
+The course page renders it as its first element below the mobile shell header and hides the desktop breadcrumb on mobile, so the two never appear together. Keeping it in Task 9 prevents an unused route component in the combined Tasks 5/6 commit.
+
 ```tsx
 import Link from "next/link.js";
 import { notFound } from "next/navigation.js";
@@ -4167,6 +4236,7 @@ git commit -m "feat: explore a course in six tabs"
 - Modify: `src/server/learning.ts`
 - Modify: `src/app/actions.ts`
 - Create: `src/app/action-state.ts`
+- Create: `src/app/error-messages.ts`
 - Create: `src/app/draft-form.tsx`
 - Modify: `src/app/courses/[id]/tabs.tsx` (OverviewPanel)
 - Modify: `src/app/courses/[id]/page.tsx` (pass the form into OverviewPanel)
@@ -4176,6 +4246,8 @@ git commit -m "feat: explore a course in six tabs"
 
 - Consumes: `prepareMarkdownUpdate`, `commitPreparedUpdate`, `assertRevision`, `advanceRevision`, `getCourse`.
 - Produces: `normalizeCourseTitleAndGoal(title, goal)`, `renderCourseShellMarkdown(title, goal)`, `updateCourseDraft(db, dataRoot, input): Course`, `DraftEditState`, `initialDraftEditState`, `ReflectionState`, `initialReflectionState`, `updateCourseDraftAction`, `DraftForm`.
+
+Execute Steps 1–5b as the **Task 10 service/action boundary** immediately after the combined Tasks 5/6 batch. It is its own tested and committed batch before Task 7. Execute the remaining UI Steps 6–10 only after Task 9, because they modify the workspace panels created there.
 
 - [ ] **Step 1: Write the failing service test**
 
@@ -4631,6 +4703,10 @@ test("modules reachable from client components import no server-only code", () =
     if (seen.has(file) || !existsSync(file)) return;
     seen.add(file);
     const source = readFileSync(file, "utf8");
+    // Next treats a `"use server"` module as a server-action reference. It is a
+    // terminal in this client-import graph, not a module whose server imports are
+    // bundled into the client.
+    if (/^[\s\S]*?^["']use server["'];/m.test(source)) return;
     assert.equal(/from "node:/.test(source), false, `${file} imports a Node builtin`);
     assert.equal(source.includes("better-sqlite3"), false, `${file} imports better-sqlite3`);
     assert.equal(/from "\.\.\/server\//.test(source) || /from "\.\.\/\.\.\/server\//.test(source) || /from "\.\.\/\.\.\/\.\.\/server\//.test(source), false, `${file} reaches into src/server`);
@@ -4649,7 +4725,21 @@ component gains a transitive server-only import. `src/server/dashboard-view.ts` 
 pure module, but it lives under `src/server/`, so client components must not import it
 either — pass the view-model results down as props from server components instead.
 
-- [ ] **Step 6: Implement the draft form**
+- [ ] **Step 5c: Verify and commit the service/action boundary before Task 7**
+
+```bash
+node --test tests/dashboard.test.ts
+npm test
+npm run lint
+npx tsc --noEmit
+git diff --check
+git add src/server/courses.ts src/server/learning.ts src/app/action-state.ts src/app/error-messages.ts src/app/actions.ts tests/dashboard.test.ts
+git commit -m "feat: add safe draft editing service"
+```
+
+Expected: all commands pass before the commit. Do not create `DraftForm` or modify course workspace UI in this boundary batch.
+
+- [ ] **Step 6: After Task 9, implement the draft form**
 
 Create `src/app/draft-form.tsx`:
 
@@ -4780,11 +4870,11 @@ git diff --check
 
 Expected: all pass, including the existing platform-foundation tests that cover `createCourse` validation messages.
 
-- [ ] **Step 10: Commit Task 10**
+- [ ] **Step 10: Verify and commit the remaining Task 10 UI**
 
 ```bash
-git add src/server/courses.ts src/server/learning.ts src/app/action-state.ts src/app/actions.ts src/app/draft-form.tsx src/app/courses/[id]/tabs.tsx src/app/courses/[id]/page.tsx tests/dashboard.test.ts
-git commit -m "feat: edit draft course details safely"
+git add src/app/draft-form.tsx src/app/courses/[id]/tabs.tsx src/app/courses/[id]/page.tsx src/app/page.tsx src/app/settings/page.tsx src/app/not-found.tsx tests/dashboard.test.ts
+git commit -m "feat: add draft editing controls"
 ```
 
 ### Task 11: Reflection submission
@@ -5073,7 +5163,7 @@ git commit -m "feat: submit the daily reflection from the dashboard"
 
 **Interfaces:**
 
-- Consumes: `Skeleton`, `Card` from Task 6.
+- Consumes: `Skeleton`, `Card` from the combined Tasks 5/6 batch.
 - Produces: three route-level loading boundaries whose shape matches the real content, and README sections that match actual behavior.
 
 - [ ] **Step 1: Write the failing documentation test**
@@ -5243,6 +5333,7 @@ git commit -m "docs: document the learning dashboard"
 
 - Verify only: the running application, a temporary `JUST_STUDY_DATA_DIR` outside the repository.
 - Modify: none unless a defect is found; then fix the exact source file and note it in the ledger.
+- Evidence: `$justStudyUiRoot/evidence/ledger.md` and `$justStudyUiRoot/evidence/screenshots/`; keep both until Task 14 cleanup.
 
 **Interfaces:**
 
@@ -5251,13 +5342,24 @@ git commit -m "docs: document the learning dashboard"
 
 - [ ] **Step 1: Seed a deterministic data root covering every state**
 
-Run from the worktree:
+Run all Task 13 shell commands in one dedicated shell session from the worktree. The setup below names the evidence directory and ledger, stops a live test server, and restores SQLite permissions on normal exit, interruption, or failure; it deliberately does **not** delete the evidence root, which Task 14 handles after review.
 
 ```bash
 set -o pipefail
 justStudyUiRoot="$(mktemp -d /private/tmp/just-study-dashboard-ui.XXXXXX)"
 case "$justStudyUiRoot" in /private/tmp/just-study-dashboard-ui.*) ;; *) exit 1 ;; esac
-node --input-type=module -e '
+justStudyEvidenceDir="$justStudyUiRoot/evidence"
+justStudyEvidenceLedger="$justStudyEvidenceDir/ledger.md"
+justStudyUiPid=""
+justStudyUiDbMode=""
+mkdir -p "$justStudyEvidenceDir/screenshots"
+printf '# Task 13 evidence\n\n' >"$justStudyEvidenceLedger"
+just_study_ui_restore() {
+  if [ -n "$justStudyUiDbMode" ] && [ -f "$justStudyUiRoot/just-study.sqlite" ]; then chmod "$justStudyUiDbMode" "$justStudyUiRoot/just-study.sqlite"; fi
+  if [ -n "$justStudyUiPid" ] && kill -0 "$justStudyUiPid" 2>/dev/null; then kill "$justStudyUiPid"; wait "$justStudyUiPid" || true; fi
+}
+trap 'status=$?; just_study_ui_restore; exit "$status"' EXIT INT TERM
+JUST_STUDY_DATA_DIR="$justStudyUiRoot" node --input-type=module -e '
 import { createCourse } from "./src/server/courses.ts";
 import { openDatabase } from "./src/server/database.ts";
 import { approveOutline, completeDay, gradeQuiz, recordDailyResearch, saveLearningCheckpoint, startQuiz } from "./src/server/learning.ts";
@@ -5296,7 +5398,7 @@ db.close();
 ' 2>&1
 ```
 
-Run the seed with `JUST_STUDY_DATA_DIR="$justStudyUiRoot"`, then assert the seeded shape before starting the server:
+The seed is explicitly prefixed with `JUST_STUDY_DATA_DIR="$justStudyUiRoot"`. Then assert the seeded shape before starting the server:
 
 ```bash
 env JUST_STUDY_DATA_DIR="$justStudyUiRoot" node --input-type=module -e '
@@ -5324,7 +5426,7 @@ justStudyUiPid=$!
 curl --retry 20 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:3000/api/health
 ```
 
-Record `justStudyUiRoot` and `justStudyUiPid` in the ledger.
+Record `justStudyUiRoot`, `justStudyUiPid`, the evidence directory, and every screenshot path in `$justStudyEvidenceLedger`.
 
 - [ ] **Step 3: Check every data state at 1280px**
 
@@ -5386,11 +5488,11 @@ Open the in-app browser at 1280×800 and confirm each of the following, capturin
 3. Choose Focus Dark, confirm `<html>` has `data-theme="focus-dark"` and the `dark` class, and that reload keeps it with no flash.
 4. Set `localStorage['just-study:theme'] = 'nope'` and reload; confirm Focus renders.
 5. Block `localStorage` (browser setting or private-mode restriction) and confirm the page still renders in Focus and the picker reports that it could not save.
-6. Run an axe accessibility scan on `/`, `/courses`, all six course tabs, `/settings`, and `/status` in all three themes. Zero serious or critical violations is required.
+6. Run an axe accessibility scan supplied by the browser/verification environment (not an added project dependency) on `/`, `/courses`, all six course tabs, `/settings`, and `/status` in all three themes. Zero serious or critical violations is required; record each route/theme result in `$justStudyEvidenceLedger`.
 
 - [ ] **Step 7: Check the failure states**
 
-1. Stop the server, `chmod 000` the SQLite file, restart, and confirm `/`, `/courses`, and `/courses/[id]` each show the database alert with a `/status` link and never an empty state. Restore permissions afterward.
+1. Stop the server, save `justStudyUiDbMode="$(stat -f '%Lp' "$justStudyUiRoot/just-study.sqlite")"`, run `chmod 000 "$justStudyUiRoot/just-study.sqlite"`, restart, and confirm `/`, `/courses`, and `/courses/[id]` each show the database alert with a `/status` link and never an empty state. Restore with `chmod "$justStudyUiDbMode" "$justStudyUiRoot/just-study.sqlite"` and then set `justStudyUiDbMode=""`; the trap is the fallback if any check aborts.
 2. Append a byte to one course's `journal.md`, reload `/courses/[id]?tab=journal`, and confirm the damaged-document alert appears, the prose is not shown, the structured tabs still work, and the file on disk is unchanged.
 3. Confirm `/status` still reports the corrupt course.
 
@@ -5399,9 +5501,10 @@ Open the in-app browser at 1280×800 and confirm each of the following, capturin
 ```bash
 kill "$justStudyUiPid"
 wait "$justStudyUiPid" || true
+justStudyUiPid=""
 ```
 
-Record in the ledger: each checked item with pass/fail, the axe result per route and theme, and any defect found with the exact file fixed. Any fix must be made with TDD, must add or extend a test in `tests/dashboard.test.ts` when the defect is deterministic, and must be committed as `fix: <what>` before Task 14 starts. Keep `justStudyUiRoot` until Task 14 finishes.
+Record in `$justStudyEvidenceLedger`: each checked item with pass/fail, the axe result per route and theme, permission/corruption setup and restoration, every screenshot path, and any defect found with the exact file fixed. Any fix must be made with TDD, must add or extend a test in `tests/dashboard.test.ts` when the defect is deterministic, and must be committed as `fix: <what>` before Task 14 starts. Keep `justStudyUiRoot` until Task 14 finishes.
 
 - [ ] **Step 9: Commit any fixes**
 
@@ -5435,7 +5538,7 @@ git status --short
 git log --oneline <phase-base>..HEAD
 ```
 
-Expected: everything passes and `git status` shows only the known regenerated `tsconfig.json`, `next-env.d.ts`, and `tsconfig.tsbuildinfo`.
+Expected: everything passes and `git status` shows only the recorded pre-existing generated baseline artifacts `tsconfig.json`, `next-env.d.ts`, and `tsconfig.tsbuildinfo`; inspect them but never stage or commit them.
 
 - [ ] **Step 2: Dispatch a fresh read-only reviewer**
 
