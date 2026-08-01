@@ -245,3 +245,64 @@ test("negotiates Streamable HTTP and lists health", { concurrency: false }, asyn
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+function structured<T>(result: Awaited<ReturnType<Client["callTool"]>>): T {
+  assert.equal(result.isError, undefined);
+  assert.ok(result.structuredContent);
+  return result.structuredContent as T;
+}
+
+test("lists, creates, resumes, and reads courses through MCP", { concurrency: false }, async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+  const requestId = crypto.randomUUID();
+  try {
+    await withMcpClient(async (client) => {
+      const names = (await client.listTools()).tools.map(({ name }) => name);
+      for (const name of ["health", "list_courses", "get_learning_state", "read_learning_document", "create_course"]) {
+        assert.ok(names.includes(name), `${name} is missing`);
+      }
+
+      const created = structured<{ ok: true; data: { created: boolean; course: { id: string; revision: number } } }>(
+        await client.callTool({ name: "create_course", arguments: { requestId, title: "자료구조", goal: "핵심 자료구조를 설명하고 선택한다." } }),
+      );
+      assert.equal(created.data.created, true);
+      assert.equal(created.data.course.revision, 0);
+      assert.equal("markdownPath" in created.data.course, false);
+
+      const duplicate = structured<{ ok: true; data: { created: boolean; course: { id: string } } }>(
+        await client.callTool({ name: "create_course", arguments: { requestId, title: "자료구조", goal: "핵심 자료구조를 설명하고 선택한다." } }),
+      );
+      assert.equal(duplicate.data.created, false);
+      assert.equal(duplicate.data.course.id, created.data.course.id);
+
+      const listed = structured<{ ok: true; data: { courses: { id: string }[] } }>(
+        await client.callTool({ name: "list_courses", arguments: {} }),
+      );
+      assert.deepEqual(listed.data.courses.map(({ id }) => id), [created.data.course.id]);
+
+      const state = structured<{ ok: true; data: { state: { course: { status: string }; days: unknown[]; currentDayMarkdown: null } } }>(
+        await client.callTool({ name: "get_learning_state", arguments: { courseId: created.data.course.id } }),
+      );
+      assert.equal(state.data.state.course.status, "draft");
+      assert.deepEqual(state.data.state.days, []);
+      assert.equal(state.data.state.currentDayMarkdown, null);
+      assert.equal(JSON.stringify(state).includes("journal"), false);
+
+      const document = structured<{ ok: true; data: { document: string; markdown: string } }>(
+        await client.callTool({ name: "read_learning_document", arguments: { courseId: created.data.course.id, document: "course" } }),
+      );
+      assert.equal(document.data.document, "course");
+      assert.match(document.data.markdown, /자료구조/);
+
+      const rejected = await client.callTool({ name: "read_learning_document", arguments: { courseId: created.data.course.id, document: "../../secret" } });
+      assert.equal(rejected.isError, true);
+      assert.equal(JSON.stringify(rejected).includes("../../secret"), false);
+    });
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
