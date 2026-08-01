@@ -5506,15 +5506,21 @@ Open the in-app browser at 1280×800 and confirm each of the following, capturin
    curl --retry 20 --retry-connrefused --retry-delay 1 -sS -o /dev/null http://127.0.0.1:3000/api/health
    ```
 
-   Confirm `/`, `/courses`, and `/courses/[id]` each show the database alert with a `/status` link and never an empty state. Then restore permissions and prove the supervised server is healthy for the remaining checks:
+   Confirm `/`, `/courses`, and `/courses/[id]` each show the database alert with a `/status` link and never an empty state. Those requests cache `runtime.db = null`, so restore permissions, stop and wait that failure-test server, clear its PID, and start a fresh supervised Step 2 server before the remaining checks:
 
    ```bash
    chmod "$justStudyUiDbMode" "$justStudyUiRoot/just-study.sqlite"
    justStudyUiDbMode=""
+   kill "$justStudyUiPid"
+   wait "$justStudyUiPid" || true
+   justStudyUiPid=""
+   if lsof -nP -iTCP:3000 -sTCP:LISTEN >/dev/null 2>&1; then exit 1; fi
+   env JUST_STUDY_DATA_DIR="$justStudyUiRoot" node node_modules/next/dist/bin/next dev -H 127.0.0.1 -p 3000 >"$justStudyUiRoot/dev-server.log" 2>&1 &
+   justStudyUiPid=$!
    curl --retry 20 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:3000/api/health
    ```
 
-   The PID is cleared only after the old process is waited and reassigned immediately after the restart, so the trap always owns the one live test server. The saved mode remains non-empty until restoration succeeds, making the trap the fallback for every abort path.
+   Each PID is cleared only after its process is waited and reassigned immediately after each restart, so the trap always owns the one live test server and no process keeps the cached null runtime. The saved mode remains non-empty until permission restoration succeeds, making the trap the fallback for every abort path.
 2. Append a byte to one course's `journal.md`, reload `/courses/[id]?tab=journal`, and confirm the damaged-document alert appears, the prose is not shown, the structured tabs still work, and the file on disk is unchanged.
 3. Confirm `/status` still reports the corrupt course.
 
