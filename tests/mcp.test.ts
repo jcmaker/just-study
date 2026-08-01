@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -28,6 +29,22 @@ import { StorageError } from "../src/server/storage.ts";
 
 function makeDataRoot(): string {
   return mkdtempSync(join(tmpdir(), "just-study-mcp-"));
+}
+
+function snapshotRootFiles(dataRoot: string): Record<string, { sha256: string; mtimeNs: string }> {
+  return Object.fromEntries(
+    readdirSync(dataRoot)
+      .sort()
+      .flatMap((name) => {
+        const path = join(dataRoot, name);
+        const stat = statSync(path, { bigint: true });
+        if (!stat.isFile()) return [];
+        return [[name, {
+          sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
+          mtimeNs: stat.mtimeNs.toString(),
+        }] as const];
+      }),
+  );
 }
 
 test("reads only a named verified learning document", () => {
@@ -408,6 +425,62 @@ test("every read-only tool leaves a closed WAL store's files unchanged", { concu
       clearTestRuntime();
       rmSync(dataRoot, { recursive: true, force: true });
     }
+  }
+});
+
+test("unpinned WAL sidecars fail closed without changing file names, hashes, or mtimes", { concurrency: false }, async () => {
+  const sourceRoot = makeDataRoot();
+  const residueRoot = makeDataRoot();
+  const previousDataRoot = process.env.JUST_STUDY_DATA_DIR;
+  const writer = openDatabase(sourceRoot);
+  const course = createCourse(writer, sourceRoot, {
+    requestId: crypto.randomUUID(),
+    title: "WAL 복구 점검",
+    goal: "승인 없는 읽기가 복구 파일을 변경하지 않게 한다.",
+  }).course;
+
+  try {
+    for (const name of ["just-study.sqlite", "just-study.sqlite-wal", "just-study.sqlite-shm"]) {
+      assert.ok(existsSync(join(sourceRoot, name)), `${name} fixture`);
+      copyFileSync(join(sourceRoot, name), join(residueRoot, name));
+    }
+    writer.close();
+    clearTestRuntime();
+    process.env.JUST_STUDY_DATA_DIR = residueRoot;
+    const before = snapshotRootFiles(residueRoot);
+    assert.deepEqual(Object.keys(before), [
+      "just-study.sqlite",
+      "just-study.sqlite-shm",
+      "just-study.sqlite-wal",
+    ]);
+
+    await withMcpClient(async (client) => {
+      for (const [name, arguments_] of [
+        ["health", {}],
+        ["list_courses", {}],
+        ["get_learning_state", { courseId: course.id }],
+        ["read_learning_document", { courseId: course.id, document: "course" }],
+      ] as const) {
+        const result = await client.callTool({ name, arguments: arguments_ });
+        assert.deepEqual(snapshotRootFiles(residueRoot), before, name);
+        if (name === "health") {
+          const health = structured<{ ok: true; data: { ok: boolean; state: string; database: string } }>(result);
+          assert.equal(health.data.ok, false);
+          assert.equal(health.data.state, "recovery_required");
+          assert.equal(health.data.database, "error");
+        } else {
+          assert.equal(result.isError, true, name);
+          assert.equal((result.structuredContent as { error: { code: string } }).error.code, "UNAVAILABLE", name);
+        }
+      }
+    });
+  } finally {
+    if (writer.open) writer.close();
+    if (previousDataRoot === undefined) delete process.env.JUST_STUDY_DATA_DIR;
+    else process.env.JUST_STUDY_DATA_DIR = previousDataRoot;
+    clearTestRuntime();
+    rmSync(sourceRoot, { recursive: true, force: true });
+    rmSync(residueRoot, { recursive: true, force: true });
   }
 });
 

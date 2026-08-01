@@ -953,6 +953,26 @@ test("reports a fresh data root as uninitialized while still checking storage", 
   }
 });
 
+test("never reports database sidecar residue as an uninitialized store", () => {
+  for (const names of [
+    ["just-study.sqlite"],
+    ["just-study.sqlite-wal"],
+    ["just-study.sqlite-shm"],
+    ["just-study.sqlite-wal", "just-study.sqlite-shm"],
+  ]) {
+    const dataRoot = makeDataRoot();
+    try {
+      for (const name of names) writeFileSync(join(dataRoot, name), "recovery residue", "utf8");
+      const health = getHealth(null, dataRoot);
+      assert.equal(health.ok, false, names.join("+"));
+      assert.equal(health.state, "recovery_required", names.join("+"));
+      assert.equal(health.database, "error", names.join("+"));
+    } finally {
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  }
+});
+
 test("reports storage failure with safe permission guidance", () => {
   const parentRoot = makeDataRoot();
   const dataRoot = join(parentRoot, "not-a-directory");
@@ -1631,6 +1651,21 @@ test("UI missing page gives a Korean recovery path", async () => {
 
   assert.match(html, /과정을 찾을 수 없습니다/);
   assert.match(html, /href="\/">과정 목록으로 돌아가기<\/a>/);
+});
+
+test("UI status renders an uninitialized schema as initialization pending", async () => {
+  const { default: StatusPage } = await import("../src/app/status/page.tsx");
+  const dataRoot = makeDataRoot();
+  setTestRuntime(dataRoot, null);
+
+  try {
+    const html = renderToStaticMarkup(createElement(StatusPage));
+    assert.match(html, /<dt>스키마<\/dt><dd>초기화 전<\/dd>/);
+    assert.equal(html.includes("읽기 실패"), false);
+  } finally {
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
 });
 
 test("UI status explains healthy and recovery-needed states with all counts", async () => {

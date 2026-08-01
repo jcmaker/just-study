@@ -264,13 +264,11 @@ export function openDatabaseReadOnly(dataRoot: string): DatabaseHandle {
   const walPath = `${databasePath}-wal`;
   const shmPath = `${databasePath}-shm`;
 
-  if (existsSync(walPath) && !existsSync(shmPath)) {
-    throw new Error("WAL shared-memory file is unavailable");
+  if (existsSync(walPath) || existsSync(shmPath)) {
+    throw new Error("Database recovery sidecars require a pinned runtime");
   }
 
-  const source = existsSync(walPath)
-    ? databasePath
-    : `file:${databasePath}?immutable=1`;
-  // DatabaseSync supports SQLite URIs; immutable clean-WAL reads avoid creating sidecars.
+  const source = `file:${databasePath}?immutable=1`;
+  // Sidecars are rejected above; immutable clean-store reads avoid creating them.
   return new DatabaseSync(source, { readOnly: true }) as unknown as DatabaseHandle;
 }

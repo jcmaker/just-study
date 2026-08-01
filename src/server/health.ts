@@ -26,6 +26,8 @@ export type HealthReport = {
 export function isUninitializedDataRoot(dataRoot: string): boolean {
   const root = resolve(dataRoot);
   return !existsSync(join(root, "just-study.sqlite")) &&
+    !existsSync(join(root, "just-study.sqlite-wal")) &&
+    !existsSync(join(root, "just-study.sqlite-shm")) &&
     !existsSync(join(root, "courses")) &&
     !existsSync(join(root, "tmp"));
 }

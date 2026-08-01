@@ -12,6 +12,9 @@ export default function StatusPage() {
   try {
     const health = getHealth(runtime.db, runtime.dataRoot);
     const schemaOk = health.schemaVersion === health.expectedSchemaVersion;
+    const schemaStatus = health.state === "uninitialized"
+      ? "초기화 전"
+      : `${stateLabel(schemaOk)} (${health.schemaVersion ?? "읽기 실패"} / ${health.expectedSchemaVersion})`;
 
     return (
       <>
@@ -41,10 +44,7 @@ export default function StatusPage() {
             <dt>데이터베이스</dt>
             <dd>{stateLabel(health.database !== "error")}</dd>
             <dt>스키마</dt>
-            <dd>
-              {stateLabel(schemaOk)} ({health.schemaVersion ?? "읽기 실패"} /{" "}
-              {health.expectedSchemaVersion})
-            </dd>
+            <dd>{schemaStatus}</dd>
             <dt>저장소</dt>
             <dd>{stateLabel(health.storage === "ok")}</dd>
             <dt>고아 과정</dt>
