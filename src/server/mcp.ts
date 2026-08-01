@@ -14,13 +14,17 @@ import {
 } from "./courses.ts";
 import { getHealth } from "./health.ts";
 import {
+  approveOutline,
   getLearningDocument,
   getLearningSnapshot,
   LearningRevisionConflictError,
   LearningStateError,
   LearningValidationError,
+  recordDailyResearch,
+  saveLearningCheckpoint,
   type LearningSnapshot,
 } from "./learning.ts";
+import type { DatabaseHandle } from "./database.ts";
 import {
   DatabaseUnavailableError,
   getRuntime,
@@ -270,6 +274,38 @@ const compactLearningStateSchema = z.object({
 }).strict();
 const stateOutputSchema = successSchema(z.object({ state: compactLearningStateSchema }).strict());
 
+const lessonSchema = z.object({
+  recallMarkdown: requiredText(1_000_000).optional(),
+  preciseExplanationMarkdown: requiredText(1_000_000).optional(),
+  eli5Markdown: requiredText(1_000_000).optional(),
+  analogyMarkdown: requiredText(1_000_000).optional(),
+  exampleMarkdown: requiredText(1_000_000).optional(),
+  applicationMarkdown: requiredText(1_000_000).optional(),
+  interviewMarkdown: requiredText(1_000_000).optional(),
+  remediationMarkdown: requiredText(1_000_000).optional(),
+}).strict();
+const conceptKeySchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/);
+const conceptSchema = z.object({ key: conceptKeySchema, label: requiredText(300) }).strict();
+const writeAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
+
+async function stateTool(
+  summary: string,
+  operation: (db: DatabaseHandle, dataRoot: string) => LearningSnapshot,
+) {
+  try {
+    const runtime = getRuntime();
+    const snapshot = operation(requireDatabase(runtime), runtime.dataRoot);
+    return success(summary, { state: compactLearningState(snapshot) });
+  } catch (error) {
+    return failure(error);
+  }
+}
+
 const INSTRUCTIONS = "실제로 확인하지 않은 출처를 만들지 마세요. 쓰기 전 최신 revision을 사용하세요. 충돌·손상 시 자동 재시도하거나 덮어쓰지 마세요. 현재 Day와 stage에 맞는 도구만 호출하세요. 웹 조사는 서버가 아니라 Codex가 수행하며 확인한 URL만 입력하세요.";
 
 export function createJustStudyMcpServer(): McpServer {
@@ -387,6 +423,56 @@ export function createJustStudyMcpServer(): McpServer {
           return { course: compactCourse(result.course), created: result.created };
         },
       )),
+  );
+
+  server.registerTool(
+    "approve_outline",
+    {
+      title: "Approve a researched 30-Day outline",
+      description: "Activates a draft only after the user approves its interview, research, knowledge map, and exactly 30 objectives.",
+      inputSchema: safeInputSchema(z.object({
+        courseId: uuidSchema,
+        expectedRevision: revisionSchema,
+        priorKnowledge: requiredText(10_000),
+        learningPreference: z.enum(["examples", "theory", "practice"]),
+        knowledgeMapMarkdown: requiredText(1_000_000),
+        research: researchInputSchema,
+        days: z.array(z.object({ objective: requiredText(500) }).strict()).length(30),
+      }).strict()),
+      outputSchema: stateOutputSchema,
+      annotations: writeAnnotations,
+    },
+    async (input) => withSafeInput(input, (value) => stateTool("30일 학습 목차를 승인했습니다.", (db, root) => approveOutline(db, root, value))),
+  );
+
+  server.registerTool(
+    "record_daily_research",
+    {
+      title: "Record verified daily research",
+      description: "Stores sources and cross-checked claims actually researched by Codex for the current Day.",
+      inputSchema: safeInputSchema(z.object({ courseId: uuidSchema, expectedRevision: revisionSchema, research: researchInputSchema }).strict()),
+      outputSchema: stateOutputSchema,
+      annotations: writeAnnotations,
+    },
+    async (input) => withSafeInput(input, (value) => stateTool("오늘의 리서치를 저장했습니다.", (db, root) => recordDailyResearch(db, root, value))),
+  );
+
+  server.registerTool(
+    "save_checkpoint",
+    {
+      title: "Save a lesson or remediation checkpoint",
+      description: "Persists supplied lesson content and concept status for the current allowed stage.",
+      inputSchema: safeInputSchema(z.object({
+        courseId: uuidSchema,
+        expectedRevision: revisionSchema,
+        lesson: lessonSchema,
+        understoodConcepts: z.array(conceptSchema).max(100).optional(),
+        remediationConcepts: z.array(conceptSchema).max(100).optional(),
+      }).strict()),
+      outputSchema: stateOutputSchema,
+      annotations: writeAnnotations,
+    },
+    async (input) => withSafeInput(input, (value) => stateTool("학습 체크포인트를 저장했습니다.", (db, root) => saveLearningCheckpoint(db, root, value))),
   );
 
   return server;
