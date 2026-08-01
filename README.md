@@ -120,7 +120,7 @@ yet.
 | `record_daily_research` | write | Stores sources and cross-checked claims actually researched by Codex for the current Day. |
 | `save_checkpoint` | write | Persists supplied lesson content and concept status for the current allowed stage. |
 | `start_quiz` | write | Stores exactly five questions fixed before seeing the learner's answers. |
-| `grade_quiz` | write | Stores one to five supplied answers, judgments, feedback, and optional clarification without inventing answers. |
+| `answer_quiz` | write | Stores the learner's chosen option for one to five questions. The server decides correctness from the saved answer key. |
 | `start_remediation_quiz` | write | Stores a different explanation and five new questions covering every remediation concept. |
 | `complete_day` | write | Stores three reflections after verified daily research and a passed five-of-five quiz. |
 

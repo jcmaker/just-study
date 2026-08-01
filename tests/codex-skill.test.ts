@@ -29,7 +29,7 @@ test("names every approved tool and all research safety invariants", () => {
   for (const name of [
     "health", "list_courses", "get_learning_state", "read_learning_document",
     "create_course", "approve_outline", "record_daily_research", "save_checkpoint",
-    "start_quiz", "grade_quiz", "start_remediation_quiz", "complete_day",
+    "start_quiz", "answer_quiz", "start_remediation_quiz", "complete_day",
   ]) assert.match(skill, new RegExp(`\\b${name}\\b`));
   for (const phrase of [
     "never ask the server to browse",

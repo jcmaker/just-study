@@ -319,7 +319,6 @@ export function QuizPanel({ history }: { history: CourseHistory }) {
   if (history.quizAttempts.length === 0) {
     return <EmptyPanel title="아직 저장된 퀴즈가 없습니다" description="강의를 마치면 Codex가 다섯 문제를 저장하고 채점 기록이 여기에 남습니다." />;
   }
-  const results = { correct: "정답", incorrect: "오답", needs_clarification: "설명 요청" } as const;
   return (
     <div className="grid gap-4">
       {history.quizAttempts.map((attempt) => (
@@ -337,19 +336,24 @@ export function QuizPanel({ history }: { history: CourseHistory }) {
             {attempt.questions.map((question) => (
               <li key={question.id} className="border-t border-solid border-border pt-3">
                 <p className="m-0 break-words font-semibold">{question.position}. {question.prompt}</p>
-                <p className="m-0 break-words text-xs text-muted-foreground">채점 기준: {question.gradingCriteria}</p>
-                {question.responses.length === 0 ? (
-                  <p className="m-0 text-sm text-muted-foreground">아직 답변하지 않았습니다.</p>
+                <ol className="mt-1 mb-0 grid gap-1 pl-5 text-sm">
+                  {question.choices.map((choice, index) => (
+                    <li
+                      key={choice}
+                      className={index === question.correctChoiceIndex ? "font-semibold" : undefined}
+                    >
+                      {choice}
+                      {index === question.correctChoiceIndex ? <span className="ml-1 text-xs">(정답)</span> : null}
+                      {question.response?.selectedChoiceIndex === index ? <span className="ml-1 text-xs text-muted-foreground">← 고른 답</span> : null}
+                    </li>
+                  ))}
+                </ol>
+                {question.response === null ? (
+                  <p className="mt-2 mb-0 text-sm text-muted-foreground">아직 답변하지 않았습니다.</p>
                 ) : (
-                  <ul className="m-0 grid list-none gap-2 p-0">
-                    {question.responses.map((response) => (
-                      <li key={response.id} className="text-sm">
-                        <p className="m-0 break-words">답변: {response.answer}</p>
-                        <p className="m-0 break-words">판정: {results[response.result]} · {response.feedback}</p>
-                        {response.clarificationQuestion ? <p className="m-0 break-words">추가 질문: {response.clarificationQuestion}</p> : null}
-                      </li>
-                    ))}
-                  </ul>
+                  <p className="mt-2 mb-0 break-words text-sm">
+                    판정: {question.response.correct ? "정답" : "오답"} · {question.explanation}
+                  </p>
                 )}
               </li>
             ))}

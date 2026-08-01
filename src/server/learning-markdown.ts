@@ -87,7 +87,7 @@ export function renderApprovedCourseMarkdown(course: Course, input: ApproveOutli
 
 export function renderProgressMarkdown(snapshot: Omit<LearningSnapshot, "documents">, savedAt: string): string {
   const latestAttempt = snapshot.quizAttempts.at(-1);
-  const answered = latestAttempt?.questions.filter(({ responses }) => responses.length > 0).length ?? 0;
+  const answered = latestAttempt?.questions.filter(({ response }) => response !== null).length ?? 0;
   const position = snapshot.course.status === "completed" ? "30/30 완료" : `Day ${snapshot.currentDay?.dayNumber ?? 0}/30`;
   return [
     "# 학습 진도", "", `- 상태: ${snapshot.course.status}`, `- 위치: ${position}`,
@@ -141,8 +141,13 @@ export function appendJournalDay(existingJournal: string, input: { day: Learning
     `#### 시도 ${attempt.attemptNumber} — ${attempt.status}`, "", `- 점수: ${attempt.score === null ? "미채점" : `${attempt.score}/5`}`,
     `- 시작: ${attempt.createdAt}`, `- 채점 완료: ${attempt.gradedAt ?? "미완료"}`, "", ...attempt.questions.flatMap((question) => [
       `##### 문제 ${question.position}`, "", `- 개념: ${escapeInline(question.conceptLabel)} (${escapeInline(question.conceptKey)})`,
-      `- 문제: ${escapeInline(question.prompt)}`, `- 채점 기준: ${escapeInline(question.gradingCriteria)}`,
-      ...question.responses.flatMap((response) => [`- 응답 ${response.responseNumber}: ${escapeInline(response.answer)}`, `  - 결과: ${response.result}`, `  - 피드백: ${escapeInline(response.feedback)}`, ...(response.clarificationQuestion === null ? [] : [`  - 명료화 질문: ${escapeInline(response.clarificationQuestion)}`])]), "",
+      `- 문제: ${escapeInline(question.prompt)}`,
+      ...question.choices.map((choice, index) => `  ${index + 1}. ${escapeInline(choice)}${index === question.correctChoiceIndex ? " (정답)" : ""}`),
+      `- 해설: ${escapeInline(question.explanation)}`,
+      ...(question.response === null ? [] : [
+        `- 고른 답: ${question.response.selectedChoiceIndex + 1}번`,
+        `  - 결과: ${question.response.correct ? "정답" : "오답"}`,
+      ]), "",
     ])]), "### 보충 학습", "", `- 실패한 시도: ${input.quizAttempts.filter(({ status }) => status === "failed").length}`, "", "### 회고", "",
     "#### 오늘 무엇을 배웠는가?", "", ...input.reflection.learned.split(/\r?\n/).map((line) => `> ${line}`), "", "#### 아직 헷갈리는 것은 무엇인가?", "", ...input.reflection.confusing.split(/\r?\n/).map((line) => `> ${line}`), "", "#### 한 줄 소감", "", ...input.reflection.feeling.split(/\r?\n/).map((line) => `> ${line}`), "", `완료 시각: ${input.completedAt}`, ""];
   const journalPrefix = existingJournal.endsWith("\n") ? existingJournal : `${existingJournal}\n`;

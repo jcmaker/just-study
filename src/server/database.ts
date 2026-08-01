@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import Database from "better-sqlite3";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export type DatabaseHandle = Database.Database;
 
 const INITIAL_SCHEMA = `
@@ -216,6 +216,51 @@ const LEARNING_SCHEMA = `
   );
 `;
 
+// v3: 퀴즈를 사지선다로 바꾼다. 서버가 정답 인덱스를 갖고 직접 채점하므로 웹과
+// 에이전트가 같은 결과를 낸다. 기존 서술형 문항에는 선택지가 없어 되살릴 수 없으니
+// 퀴즈 기록만 비우고 해당 Day를 강의 단계로 되돌린다. 과정·목차·리서치·학습 기록은 남는다.
+const MULTIPLE_CHOICE_QUIZ_SCHEMA = `
+  DELETE FROM quiz_attempts;
+  DELETE FROM day_concepts WHERE status = 'remediation';
+
+  UPDATE courses
+     SET current_stage = 'lecture'
+   WHERE current_stage IN ('quiz', 'remediation');
+
+  DROP TABLE quiz_responses;
+  DROP TABLE quiz_questions;
+
+  CREATE TABLE quiz_questions (
+    id TEXT PRIMARY KEY,
+    day_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    position INTEGER NOT NULL CHECK(position BETWEEN 1 AND 5),
+    concept_key TEXT NOT NULL,
+    concept_label TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    prompt_sha256 TEXT NOT NULL CHECK(length(prompt_sha256) = 64),
+    choices TEXT NOT NULL,
+    correct_choice_index INTEGER NOT NULL CHECK(correct_choice_index BETWEEN 0 AND 3),
+    explanation TEXT NOT NULL,
+    UNIQUE(attempt_id, position),
+    UNIQUE(day_id, prompt_sha256),
+    UNIQUE(attempt_id, id),
+    FOREIGN KEY(day_id, attempt_id)
+      REFERENCES quiz_attempts(day_id, id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE quiz_responses (
+    id TEXT PRIMARY KEY,
+    attempt_id TEXT NOT NULL,
+    question_id TEXT NOT NULL UNIQUE,
+    selected_choice_index INTEGER NOT NULL CHECK(selected_choice_index BETWEEN 0 AND 3),
+    correct INTEGER NOT NULL CHECK(correct IN (0, 1)),
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(attempt_id, question_id)
+      REFERENCES quiz_questions(attempt_id, id) ON DELETE CASCADE
+  );
+`;
+
 function migrateDatabase(db: DatabaseHandle): void {
   const current = db.pragma("user_version", { simple: true }) as number;
 
@@ -233,6 +278,11 @@ function migrateDatabase(db: DatabaseHandle): void {
     if (version === 1) {
       db.exec(LEARNING_SCHEMA);
       db.pragma("user_version = 2");
+      version = 2;
+    }
+    if (version === 2) {
+      db.exec(MULTIPLE_CHOICE_QUIZ_SCHEMA);
+      db.pragma("user_version = 3");
     }
   })();
 }

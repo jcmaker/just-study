@@ -1063,19 +1063,21 @@ function quizQuestions(prefix: string) {
     conceptKey: `${prefix}-${index + 1}`,
     conceptLabel: `${prefix} 개념 ${index + 1}`,
     prompt: `${prefix} 질문 ${index + 1}: 핵심 원리를 설명하세요.`,
-    gradingCriteria: "핵심 원리와 적용 이유를 모두 설명한다.",
+    choices: [`${prefix} 보기 A${index + 1}`, `${prefix} 보기 B${index + 1}`, `${prefix} 보기 C${index + 1}`, `${prefix} 보기 D${index + 1}`],
+    correctChoiceIndex: index % 4,
+    explanation: "핵심 원리와 적용 이유를 모두 설명한다.",
   }));
 }
 
-function terminalGrades(
+function terminalAnswers(
   questions: ReturnType<typeof quizQuestions>,
   incorrectIndex: number | null,
 ) {
   return questions.map((question, index) => ({
     questionId: question.id,
-    answer: `${question.conceptLabel}에 대한 사용자 답변`,
-    result: index === incorrectIndex ? "incorrect" as const : "correct" as const,
-    feedback: index === incorrectIndex ? "적용 이유를 보완해야 합니다." : "핵심 원리와 적용 이유가 정확합니다.",
+    selectedChoiceIndex: index === incorrectIndex
+      ? (question.correctChoiceIndex + 1) % 4
+      : question.correctChoiceIndex,
   }));
 }
 
@@ -1096,31 +1098,27 @@ test("drives ambiguity, 4/5 remediation, and 5/5 reflection through the full Day
       assert.equal(started.data.state.course.revision, 4);
       assert.equal(started.data.state.course.currentStage, "quiz");
 
-      const clarification = structured<StateResult>(await client.callTool({
-        name: "grade_quiz",
+      // 한 문항만 먼저 답하면 채점이 끝나지 않고 quiz 단계에 머문다.
+      const partial = structured<StateResult>(await client.callTool({
+        name: "answer_quiz",
         arguments: {
           courseId,
           expectedRevision: 4,
           attemptId: firstAttempt.id,
-          grades: [{
-            questionId: firstQuestions[0]!.id,
-            answer: "정렬한다는 뜻인가요?",
-            result: "needs_clarification",
-            feedback: "어떤 비용을 기준으로 정렬하는지 불명확합니다.",
-            clarificationQuestion: "시간 비용과 공간 비용 중 무엇을 뜻하나요?",
-          }],
+          answers: [{ questionId: firstQuestions[0]!.id, selectedChoiceIndex: firstQuestions[0]!.correctChoiceIndex }],
         },
       }));
-      assert.equal(clarification.data.state.course.revision, 5);
-      assert.equal(clarification.data.state.course.currentStage, "quiz");
+      assert.equal(partial.data.state.course.revision, 5);
+      assert.equal(partial.data.state.course.currentStage, "quiz");
 
+      // 이미 답한 0번을 빼고 나머지를 보낸다. 마지막 문항만 오답이라 4/5가 된다.
       const failed = structured<StateResult>(await client.callTool({
-        name: "grade_quiz",
+        name: "answer_quiz",
         arguments: {
           courseId,
           expectedRevision: 5,
           attemptId: firstAttempt.id,
-          grades: terminalGrades(firstQuestions, 4),
+          answers: terminalAnswers(firstQuestions, 4).slice(1),
         },
       }));
       assert.equal(failed.data.state.quizAttempts.at(-1)!.score, 4);
@@ -1152,8 +1150,8 @@ test("drives ambiguity, 4/5 remediation, and 5/5 reflection through the full Day
       assert.equal(restarted.data.state.course.revision, 8);
 
       const passed = structured<StateResult>(await client.callTool({
-        name: "grade_quiz",
-        arguments: { courseId, expectedRevision: 8, attemptId: secondAttempt.id, grades: terminalGrades(secondQuestions, null) },
+        name: "answer_quiz",
+        arguments: { courseId, expectedRevision: 8, attemptId: secondAttempt.id, answers: terminalAnswers(secondQuestions, null) },
       }));
       assert.equal(passed.data.state.quizAttempts.at(-1)!.score, 5);
       assert.equal(passed.data.state.course.currentStage, "reflection");
@@ -1317,11 +1315,11 @@ test("registers exactly the twelve approved tools with correct annotations and a
       const tools = (await client.listTools()).tools;
       const names = tools.map(({ name }) => name).sort();
       assert.deepEqual(names, [
+        "answer_quiz",
         "approve_outline",
         "complete_day",
         "create_course",
         "get_learning_state",
-        "grade_quiz",
         "health",
         "list_courses",
         "read_learning_document",
@@ -1393,18 +1391,12 @@ test("resumes an in-progress clarification after a full runtime restart", { conc
       }));
       const attemptId = started.data.state.quizAttempts.at(-1)!.id;
       const clarified = structured<StateResult>(await client.callTool({
-        name: "grade_quiz",
+        name: "answer_quiz",
         arguments: {
           courseId,
           expectedRevision: 4,
           attemptId,
-          grades: [{
-            questionId: questions[0]!.id,
-            answer: "정렬한다는 뜻인가요?",
-            result: "needs_clarification",
-            feedback: "어떤 비용인지 불명확합니다.",
-            clarificationQuestion: "시간 비용과 공간 비용 중 무엇을 뜻하나요?",
-          }],
+          answers: [{ questionId: questions[0]!.id, selectedChoiceIndex: questions[0]!.correctChoiceIndex }],
         },
       }));
       assert.equal(clarified.data.state.course.revision, 5);
@@ -1425,14 +1417,14 @@ test("resumes an in-progress clarification after a full runtime restart", { conc
         arguments: { courseId },
       }));
       const attempt = resumed.data.state.quizAttempts.at(-1)!;
-      const response = attempt.questions[0]!.responses.at(-1)!;
+      const response = attempt.questions[0]!.response!;
       assert.equal(resumed.data.state.course.currentStage, "quiz");
       assert.equal(resumed.data.state.course.revision, expected.course.revision);
       assert.equal(resumed.data.state.currentDay?.id, expected.currentDay?.id);
       assert.equal(resumed.data.state.currentDayMarkdown, expected.currentDayMarkdown);
       assert.deepEqual(attempt.questions, expected.quizAttempts.at(-1)!.questions);
-      assert.equal(response.result, "needs_clarification");
-      assert.equal(response.clarificationQuestion, "시간 비용과 공간 비용 중 무엇을 뜻하나요?");
+      assert.equal(response.correct, true);
+      assert.equal(response.selectedChoiceIndex, attempt.questions[0]!.correctChoiceIndex);
     });
   } finally {
     db?.close();
@@ -1502,8 +1494,8 @@ test("drives the complete 30-Day MCP-only acceptance loop to terminal cleanup", 
         })).data.state;
         const attemptId = state.quizAttempts.at(-1)!.id;
         state = structured<StateResult>(await client.callTool({
-          name: "grade_quiz",
-          arguments: { courseId, expectedRevision: state.course.revision, attemptId, grades: terminalGrades(questions, null) },
+          name: "answer_quiz",
+          arguments: { courseId, expectedRevision: state.course.revision, attemptId, answers: terminalAnswers(questions, null) },
         })).data.state;
         assert.equal(state.course.currentStage, "reflection");
 
@@ -1578,16 +1570,11 @@ test("schema rejection matrix rejects without mutation", { concurrency: false },
           remediationConcepts: [],
         },
         start_quiz: { courseId, expectedRevision: 0, questions },
-        grade_quiz: {
+        answer_quiz: {
           courseId,
           expectedRevision: 0,
           attemptId,
-          grades: [{
-            questionId: questions[0]!.id,
-            answer: "답변",
-            result: "correct",
-            feedback: "피드백",
-          }],
+          answers: [{ questionId: questions[0]!.id, selectedChoiceIndex: 0 }],
         },
         start_remediation_quiz: {
           courseId,
@@ -1626,8 +1613,8 @@ test("schema rejection matrix rejects without mutation", { concurrency: false },
       }
 
       const approvedNames = [
-        "approve_outline", "complete_day", "create_course", "get_learning_state",
-        "grade_quiz", "health", "list_courses", "read_learning_document",
+        "answer_quiz", "approve_outline", "complete_day", "create_course",
+        "get_learning_state", "health", "list_courses", "read_learning_document",
         "record_daily_research", "save_checkpoint", "start_quiz",
         "start_remediation_quiz",
       ];
@@ -1645,7 +1632,7 @@ test("schema rejection matrix rejects without mutation", { concurrency: false },
         ["record_daily_research", { ...validShapes.record_daily_research, courseId: 7 }],
         ["save_checkpoint", { ...validShapes.save_checkpoint, courseId: 7 }],
         ["start_quiz", { ...validShapes.start_quiz, courseId: 7 }],
-        ["grade_quiz", { ...validShapes.grade_quiz, courseId: 7 }],
+        ["answer_quiz", { ...validShapes.answer_quiz, courseId: 7 }],
         ["start_remediation_quiz", { ...validShapes.start_remediation_quiz, courseId: 7 }],
         ["complete_day", { ...validShapes.complete_day, courseId: 7 }],
       ] as const) {
@@ -1680,7 +1667,7 @@ test("schema rejection matrix rejects without mutation", { concurrency: false },
           understoodConcepts: Array.from({ length: 101 }, (_, index) => ({ key: `key-${index}`, label: `개념 ${index}` })),
         }],
         ["start_quiz", { ...validShapes.start_quiz, questions: questions.slice(0, 4) }],
-        ["grade_quiz", { ...validShapes.grade_quiz, grades: [] }],
+        ["answer_quiz", { ...validShapes.answer_quiz, answers: [] }],
         ["start_remediation_quiz", {
           ...validShapes.start_remediation_quiz,
           questions: [...questions, { ...questions[0]!, id: crypto.randomUUID(), conceptKey: "schema-6" }],

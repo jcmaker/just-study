@@ -43,7 +43,7 @@ import { openDatabase, type DatabaseHandle } from "../src/server/database.ts";
 import {
   approveOutline,
   completeDay,
-  gradeQuiz,
+  answerQuiz,
   getCourseHistory,
   getLearningSnapshot,
   LearningRevisionConflictError,
@@ -179,16 +179,19 @@ function questions(prefix: string) {
     conceptKey: `${prefix}-${index + 1}`,
     conceptLabel: `${prefix} 개념 ${index + 1}`,
     prompt: `${prefix} 질문 ${index + 1}: 핵심 원리를 설명하세요.`,
-    gradingCriteria: "핵심 원리와 적용 이유를 모두 설명한다.",
+    choices: [`${prefix} 보기 A${index + 1}`, `${prefix} 보기 B${index + 1}`, `${prefix} 보기 C${index + 1}`, `${prefix} 보기 D${index + 1}`],
+    correctChoiceIndex: index % 4,
+    explanation: "핵심 원리와 적용 이유를 모두 설명한다.",
   }));
 }
 
-function grades(list: ReturnType<typeof questions>, incorrectIndex: number | null) {
+// 저장된 정답을 고르면 정답, 하나 옆을 고르면 오답이 된다.
+function answers(list: ReturnType<typeof questions>, incorrectIndex: number | null) {
   return list.map((question, index) => ({
     questionId: question.id,
-    answer: `${question.conceptLabel}에 대한 사용자 답변`,
-    result: index === incorrectIndex ? ("incorrect" as const) : ("correct" as const),
-    feedback: index === incorrectIndex ? "적용 이유를 보완해야 합니다." : "핵심 원리와 적용 이유가 정확합니다.",
+    selectedChoiceIndex: index === incorrectIndex
+      ? (question.correctChoiceIndex + 1) % 4
+      : question.correctChoiceIndex,
   }));
 }
 
@@ -225,7 +228,7 @@ function completeCurrentDay(db: DatabaseHandle, dataRoot: string, courseId: stri
   const list = questions(prefix);
   state = startQuiz(db, dataRoot, { courseId, expectedRevision: state.course.revision, questions: list });
   const attemptId = state.quizAttempts.at(-1)!.id;
-  state = gradeQuiz(db, dataRoot, { courseId, expectedRevision: state.course.revision, attemptId, grades: grades(list, null) });
+  state = answerQuiz(db, dataRoot, { courseId, expectedRevision: state.course.revision, attemptId, answers: answers(list, null) });
   state = completeDay(db, dataRoot, {
     courseId,
     expectedRevision: state.course.revision,
@@ -324,17 +327,11 @@ test("dashboard overview reports an in-progress quiz response and keeps recent D
     const list = questions("os-day-7");
     state = startQuiz(db, dataRoot, { courseId: course.course.id, expectedRevision: state.course.revision, questions: list });
     const attemptId = state.quizAttempts.at(-1)!.id;
-    gradeQuiz(db, dataRoot, {
+    answerQuiz(db, dataRoot, {
       courseId: course.course.id,
       expectedRevision: state.course.revision,
       attemptId,
-      grades: [{
-        questionId: list[0]!.id,
-        answer: "정렬한다는 뜻인가요?",
-        result: "needs_clarification",
-        feedback: "어떤 비용인지 불명확합니다.",
-        clarificationQuestion: "시간 비용과 공간 비용 중 무엇을 뜻하나요?",
-      }],
+      answers: [{ questionId: list[0]!.id, selectedChoiceIndex: list[0]!.correctChoiceIndex }],
     });
 
     const overview = getDashboardOverview(db);
@@ -379,8 +376,8 @@ test("course history returns every research run and quiz attempt with Day contex
     assert.equal(attempt.status, "passed");
     assert.equal(attempt.score, 5);
     assert.equal(attempt.questions.length, 5);
-    assert.equal(attempt.questions[0]!.responses.length, 1);
-    assert.equal(attempt.questions[0]!.responses[0]!.result, "correct");
+    assert.equal(attempt.questions[0]!.response !== null, true);
+    assert.equal(attempt.questions[0]!.response!.correct, true);
 
     assert.equal(getCourseHistory(db, crypto.randomUUID()), null);
     assert.equal(/sha256/i.test(JSON.stringify(history)), false);
@@ -1430,11 +1427,11 @@ test("reflection cannot bypass stage, quiz mastery, or Day 30 termination", () =
     const list = questions("reflect");
     state = startQuiz(db, dataRoot, { courseId, expectedRevision: state.course.revision, questions: list });
     const attemptId = state.quizAttempts.at(-1)!.id;
-    state = gradeQuiz(db, dataRoot, {
+    state = answerQuiz(db, dataRoot, {
       courseId,
       expectedRevision: state.course.revision,
       attemptId,
-      grades: grades(list, 2),
+      answers: answers(list, 2),
     });
     assert.equal(state.course.currentStage, "remediation");
     assert.throws(
@@ -1465,11 +1462,11 @@ test("reflection cannot bypass stage, quiz mastery, or Day 30 termination", () =
           questions: second,
         });
         const secondAttempt = inner.quizAttempts.at(-1)!.id;
-        inner = gradeQuiz(db, dataRoot, {
+        inner = answerQuiz(db, dataRoot, {
           courseId,
           expectedRevision: inner.course.revision,
           attemptId: secondAttempt,
-          grades: grades(second, null),
+          answers: answers(second, null),
         });
         assert.equal(inner.course.currentStage, "reflection");
         inner = completeDay(db, dataRoot, { courseId, expectedRevision: inner.course.revision, reflection });
@@ -1641,11 +1638,11 @@ function reachReflection(db: DatabaseHandle, dataRoot: string, title: string, pr
   });
   const list = questions(prefix);
   state = startQuiz(db, dataRoot, { courseId, expectedRevision: state.course.revision, questions: list });
-  state = gradeQuiz(db, dataRoot, {
+  state = answerQuiz(db, dataRoot, {
     courseId,
     expectedRevision: state.course.revision,
     attemptId: state.quizAttempts.at(-1)!.id,
-    grades: grades(list, null),
+    answers: answers(list, null),
   });
   return { courseId, state };
 }

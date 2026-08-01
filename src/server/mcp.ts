@@ -18,7 +18,7 @@ import {
   completeDay,
   getLearningDocument,
   getLearningSnapshot,
-  gradeQuiz,
+  answerQuiz,
   LearningRevisionConflictError,
   LearningStateError,
   LearningValidationError,
@@ -267,11 +267,8 @@ const conceptOutputSchema = z.object({ key: z.string(), label: z.string() }).str
 const quizResponseSchema = z.object({
   id: uuidSchema,
   questionId: uuidSchema,
-  responseNumber: z.number().int().positive(),
-  answer: z.string(),
-  result: z.enum(["correct", "incorrect", "needs_clarification"]),
-  feedback: z.string(),
-  clarificationQuestion: z.string().nullable(),
+  selectedChoiceIndex: z.number().int().min(0).max(3),
+  correct: z.boolean(),
   createdAt: z.string(),
 }).strict();
 const quizQuestionOutputSchema = z.object({
@@ -280,8 +277,10 @@ const quizQuestionOutputSchema = z.object({
   conceptKey: z.string(),
   conceptLabel: z.string(),
   prompt: z.string(),
-  gradingCriteria: z.string(),
-  responses: z.array(quizResponseSchema),
+  choices: z.array(z.string()).length(4),
+  correctChoiceIndex: z.number().int().min(0).max(3),
+  explanation: z.string(),
+  response: quizResponseSchema.nullable(),
 }).strict();
 const quizAttemptSchema = z.object({
   id: uuidSchema,
@@ -321,14 +320,14 @@ const quizQuestionSchema = z.object({
   conceptKey: conceptKeySchema,
   conceptLabel: requiredText(300),
   prompt: requiredText(10_000),
-  gradingCriteria: requiredText(10_000),
+  choices: z.array(requiredText(1_000)).length(4),
+  correctChoiceIndex: z.number().int().min(0).max(3),
+  explanation: requiredText(10_000),
 }).strict();
-const gradeSchema = z.object({
+// 결과는 서버가 정한다. 호출자는 학습자가 고른 번호만 보낸다.
+const answerSchema = z.object({
   questionId: uuidSchema,
-  answer: requiredText(50_000),
-  result: z.enum(["correct", "incorrect", "needs_clarification"]),
-  feedback: requiredText(10_000),
-  clarificationQuestion: requiredText(10_000).optional(),
+  selectedChoiceIndex: z.number().int().min(0).max(3),
 }).strict();
 const reflectionSchema = z.object({
   learned: requiredText(10_000),
@@ -564,15 +563,15 @@ export function createJustStudyMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "grade_quiz",
+    "answer_quiz",
     {
-      title: "Grade quiz responses",
-      description: "Stores one to five supplied answers, judgments, feedback, and optional clarification without inventing answers.",
-      inputSchema: safeInputSchema(z.object({ courseId: uuidSchema, expectedRevision: revisionSchema, attemptId: uuidSchema, grades: z.array(gradeSchema).min(1).max(5) }).strict()),
+      title: "Record quiz answers",
+      description: "Stores the learner's chosen option for one to five questions. The server decides correctness from the saved answer key.",
+      inputSchema: safeInputSchema(z.object({ courseId: uuidSchema, expectedRevision: revisionSchema, attemptId: uuidSchema, answers: z.array(answerSchema).min(1).max(5) }).strict()),
       outputSchema: stateOutputSchema,
       annotations: writeAnnotations,
     },
-    async (input) => withSafeInput(input, (value) => stateTool("퀴즈 응답과 판정을 저장했습니다.", (db, root) => gradeQuiz(db, root, value))),
+    async (input) => withSafeInput(input, (value) => stateTool("퀴즈 답안을 저장하고 채점했습니다.", (db, root) => answerQuiz(db, root, value))),
   );
 
   server.registerTool(

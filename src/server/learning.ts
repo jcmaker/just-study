@@ -34,13 +34,20 @@ export type ResearchClaimInput = { id: string; statement: string; major: boolean
 export type ResearchBundleInput = { questions: readonly string[]; topicCriteria: readonly string[]; narrativeMarkdown: string; sources: readonly ResearchSourceInput[]; claims: readonly ResearchClaimInput[] };
 export type ApproveOutlineInput = { courseId: string; expectedRevision: number; priorKnowledge: string; learningPreference: LearningPreference; knowledgeMapMarkdown: string; research: ResearchBundleInput; days: readonly { objective: string }[] };
 export type ConceptInput = { key: string; label: string };
-export type QuizQuestionInput = { id: string; conceptKey: string; conceptLabel: string; prompt: string; gradingCriteria: string };
-export type QuestionGradeInput = { questionId: string; answer: string; result: "correct" | "incorrect" | "needs_clarification"; feedback: string; clarificationQuestion?: string };
+export type QuizQuestionInput = {
+  id: string; conceptKey: string; conceptLabel: string; prompt: string;
+  choices: readonly string[]; correctChoiceIndex: number; explanation: string;
+};
+// 서버가 정답 인덱스를 갖고 채점한다. 호출자는 고른 번호만 보낸다.
+export type QuestionAnswerInput = { questionId: string; selectedChoiceIndex: number };
 export type LessonContentInput = { recallMarkdown: string; preciseExplanationMarkdown: string; eli5Markdown: string; analogyMarkdown: string; exampleMarkdown: string; applicationMarkdown: string; interviewMarkdown: string; remediationMarkdown?: string };
 export type ReflectionInput = { learned: string; confusing: string; feeling: string };
 export type LearningDay = { id: string; dayNumber: number; objective: string; completedAt: string | null };
-export type QuizResponse = { id: string; questionId: string; responseNumber: number; answer: string; result: "correct" | "incorrect" | "needs_clarification"; feedback: string; clarificationQuestion: string | null; createdAt: string };
-export type QuizQuestion = { id: string; position: number; conceptKey: string; conceptLabel: string; prompt: string; gradingCriteria: string; responses: QuizResponse[] };
+export type QuizResponse = { id: string; questionId: string; selectedChoiceIndex: number; correct: boolean; createdAt: string };
+export type QuizQuestion = {
+  id: string; position: number; conceptKey: string; conceptLabel: string; prompt: string;
+  choices: string[]; correctChoiceIndex: number; explanation: string; response: QuizResponse | null;
+};
 export type QuizAttempt = { id: string; attemptNumber: number; status: "in_progress" | "passed" | "failed"; score: number | null; questions: QuizQuestion[]; createdAt: string; gradedAt: string | null };
 export type ResearchRun = { id: string; scope: "course" | "day"; dayId: string | null; questions: string[]; topicCriteria: string[]; sources: (ResearchSourceInput & { totalScore: number })[]; claims: ResearchClaimInput[]; createdAt: string };
 export type LearningSnapshot = { course: Course; days: LearningDay[]; currentDay: LearningDay | null; researchRuns: ResearchRun[]; understoodConcepts: ConceptInput[]; remediationConcepts: ConceptInput[]; quizAttempts: QuizAttempt[]; documents: { course: string; progress: string | null; journal: string | null; currentDay: string | null } };
@@ -465,18 +472,34 @@ function validateQuizQuestions(value: unknown): ValidatedQuizQuestion[] {
     const conceptLabel = requiredText(question.conceptLabel, `questions[${index}] concept label`, 300);
     if (/[\r\n]/.test(conceptLabel)) throw new LearningValidationError("concept label must be single-line");
     const prompt = requiredText(question.prompt, `questions[${index}] prompt`, 10_000);
-    const gradingCriteria = requiredText(question.gradingCriteria, `questions[${index}] grading criteria`, 10_000);
+    if (!Array.isArray(question.choices) || question.choices.length !== 4) {
+      throw new LearningValidationError(`questions[${index}] must offer exactly four choices`);
+    }
+    const choices = question.choices.map((choice, choiceIndex) =>
+      requiredText(choice, `questions[${index}] choices[${choiceIndex}]`, 1_000));
+    if (choices.some((choice) => /[\r\n]/.test(choice))) throw new LearningValidationError("choice must be single-line");
+    if (new Set(choices).size !== choices.length) throw new LearningValidationError(`questions[${index}] choices are duplicated`);
+    if (!Number.isInteger(question.correctChoiceIndex) || question.correctChoiceIndex! < 0 || question.correctChoiceIndex! > 3) {
+      throw new LearningValidationError(`questions[${index}] correct choice index must be 0 to 3`);
+    }
+    const explanation = requiredText(question.explanation, `questions[${index}] explanation`, 10_000);
     const promptHash = promptSha256(prompt);
     if (promptHashes.has(promptHash)) throw new LearningValidationError("question prompt is duplicated");
     ids.add(question.id); conceptKeys.add(question.conceptKey); promptHashes.add(promptHash);
-    return { id: question.id, conceptKey: question.conceptKey, conceptLabel, prompt, gradingCriteria, promptHash };
+    return {
+      id: question.id, conceptKey: question.conceptKey, conceptLabel, prompt,
+      choices, correctChoiceIndex: question.correctChoiceIndex!, explanation, promptHash,
+    };
   });
 }
 
 function insertQuizAttempt(db: DatabaseHandle, dayId: string, attemptId: string, attemptNumber: number, questions: readonly ValidatedQuizQuestion[], createdAt: string): void {
   db.prepare(`INSERT INTO quiz_attempts (id, day_id, attempt_number, status, score, created_at, graded_at) VALUES (?, ?, ?, 'in_progress', NULL, ?, NULL)`).run(attemptId, dayId, attemptNumber, createdAt);
-  const insertQuestion = db.prepare(`INSERT INTO quiz_questions (id, day_id, attempt_id, position, concept_key, concept_label, prompt, prompt_sha256, grading_criteria) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  questions.forEach((question, index) => insertQuestion.run(question.id, dayId, attemptId, index + 1, question.conceptKey, question.conceptLabel, question.prompt, question.promptHash, question.gradingCriteria));
+  const insertQuestion = db.prepare(`INSERT INTO quiz_questions (id, day_id, attempt_id, position, concept_key, concept_label, prompt, prompt_sha256, choices, correct_choice_index, explanation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  questions.forEach((question, index) => insertQuestion.run(
+    question.id, dayId, attemptId, index + 1, question.conceptKey, question.conceptLabel,
+    question.prompt, question.promptHash, JSON.stringify(question.choices), question.correctChoiceIndex, question.explanation,
+  ));
 }
 
 function assertLectureCoverage(db: DatabaseHandle, dayId: string): void {
@@ -490,7 +513,7 @@ function quizAttemptNumber(db: DatabaseHandle, dayId: string): number {
 }
 
 function newQuizAttempt(id: string, attemptNumber: number, questions: readonly ValidatedQuizQuestion[], now: string): QuizAttempt {
-  return { id, attemptNumber, status: "in_progress", score: null, createdAt: now, gradedAt: null, questions: questions.map((question, index) => ({ id: question.id, position: index + 1, conceptKey: question.conceptKey, conceptLabel: question.conceptLabel, prompt: question.prompt, gradingCriteria: question.gradingCriteria, responses: [] })) };
+  return { id, attemptNumber, status: "in_progress", score: null, createdAt: now, gradedAt: null, questions: questions.map((question, index) => ({ id: question.id, position: index + 1, conceptKey: question.conceptKey, conceptLabel: question.conceptLabel, prompt: question.prompt, choices: [...question.choices], correctChoiceIndex: question.correctChoiceIndex, explanation: question.explanation, response: null })) };
 }
 
 export function startQuiz(db: DatabaseHandle, dataRoot: string, input: { courseId: string; expectedRevision: number; questions: readonly QuizQuestionInput[] }): LearningSnapshot {
@@ -550,45 +573,46 @@ export function startRemediationQuiz(db: DatabaseHandle, dataRoot: string, input
   return getLearningSnapshot(db, dataRoot, course.id)!;
 }
 
-function validateQuestionGrades(value: unknown): QuestionGradeInput[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 5) throw new LearningValidationError("grades must contain 1..5 entries");
+function validateQuestionAnswers(value: unknown): QuestionAnswerInput[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 5) throw new LearningValidationError("answers must contain 1..5 entries");
   const questionIds = new Set<string>();
   return value.map((value, index) => {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new LearningValidationError(`grades[${index}] is invalid`);
-    const grade = value as Partial<QuestionGradeInput>;
-    if (typeof grade.questionId !== "string" || !UUID_PATTERN.test(grade.questionId) || questionIds.has(grade.questionId)) throw new LearningValidationError(`grades[${index}] question ID is invalid or duplicated`);
-    if (grade.result !== "correct" && grade.result !== "incorrect" && grade.result !== "needs_clarification") throw new LearningValidationError(`grades[${index}] result is invalid`);
-    const answer = requiredText(grade.answer, `grades[${index}] answer`, 50_000), feedback = requiredText(grade.feedback, `grades[${index}] feedback`, 10_000);
-    if (grade.result !== "needs_clarification" && grade.clarificationQuestion !== undefined) throw new LearningValidationError("terminal grade must not include a clarification question");
-    const clarificationQuestion = grade.result === "needs_clarification" ? requiredText(grade.clarificationQuestion, `grades[${index}] clarification question`, 10_000) : undefined;
-    questionIds.add(grade.questionId);
-    return { questionId: grade.questionId, answer, result: grade.result, feedback, ...(clarificationQuestion === undefined ? {} : { clarificationQuestion }) };
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new LearningValidationError(`answers[${index}] is invalid`);
+    const answer = value as Partial<QuestionAnswerInput>;
+    if (typeof answer.questionId !== "string" || !UUID_PATTERN.test(answer.questionId) || questionIds.has(answer.questionId)) throw new LearningValidationError(`answers[${index}] question ID is invalid or duplicated`);
+    if (!Number.isInteger(answer.selectedChoiceIndex) || answer.selectedChoiceIndex! < 0 || answer.selectedChoiceIndex! > 3) {
+      throw new LearningValidationError(`answers[${index}] selected choice index must be 0 to 3`);
+    }
+    questionIds.add(answer.questionId);
+    return { questionId: answer.questionId, selectedChoiceIndex: answer.selectedChoiceIndex! };
   });
 }
 
-export function gradeQuiz(db: DatabaseHandle, dataRoot: string, input: { courseId: string; expectedRevision: number; attemptId: string; grades: readonly QuestionGradeInput[] }): LearningSnapshot {
+export function answerQuiz(db: DatabaseHandle, dataRoot: string, input: { courseId: string; expectedRevision: number; attemptId: string; answers: readonly QuestionAnswerInput[] }): LearningSnapshot {
   if (typeof input !== "object" || input === null || Array.isArray(input) || !UUID_PATTERN.test(input.courseId) || !UUID_PATTERN.test(input.attemptId)) throw new LearningValidationError("courseId or attemptId is invalid");
-  const grades = validateQuestionGrades(input.grades);
+  const answers = validateQuestionAnswers(input.answers);
   const course = getCourse(db, input.courseId);
   if (!course) throw new LearningStateError("Course does not exist");
   assertRevision(course, input.expectedRevision);
-  if (course.status !== "active" || course.currentStage !== "quiz" || course.currentDayId === null) throw new LearningStateError("Quiz grading requires an active quiz");
+  if (course.status !== "active" || course.currentStage !== "quiz" || course.currentDayId === null) throw new LearningStateError("Answering requires an active quiz");
   const snapshot = getLearningSnapshot(db, dataRoot, course.id)!;
   const day = snapshot.currentDay!, attempt = snapshot.quizAttempts.at(-1);
   if (!attempt || attempt.id !== input.attemptId || attempt.status !== "in_progress") throw new LearningStateError("Attempt is not the current in-progress attempt");
   const questions = new Map(attempt.questions.map((question) => [question.id, question]));
   const now = new Date().toISOString(), newResponses = new Map<string, QuizResponse>();
-  for (const grade of grades) {
-    const question = questions.get(grade.questionId);
-    if (!question) throw new LearningValidationError("grade question does not belong to the attempt");
-    const latest = question.responses.at(-1);
-    if (latest && latest.result !== "needs_clarification") throw new LearningStateError("question already has a terminal response");
-    newResponses.set(question.id, { id: randomUUID(), questionId: question.id, responseNumber: (latest?.responseNumber ?? 0) + 1, answer: grade.answer, result: grade.result, feedback: grade.feedback, clarificationQuestion: grade.clarificationQuestion ?? null, createdAt: now });
+  for (const answer of answers) {
+    const question = questions.get(answer.questionId);
+    if (!question) throw new LearningValidationError("answer question does not belong to the attempt");
+    if (question.response) throw new LearningStateError("question already has an answer");
+    // 정답 판정은 저장된 정답 인덱스로만 한다. 호출자가 결과를 지정할 수 없다.
+    newResponses.set(question.id, {
+      id: randomUUID(), questionId: question.id, selectedChoiceIndex: answer.selectedChoiceIndex,
+      correct: answer.selectedChoiceIndex === question.correctChoiceIndex, createdAt: now,
+    });
   }
-  const projectedQuestions = attempt.questions.map((question) => ({ ...question, responses: newResponses.has(question.id) ? [...question.responses, newResponses.get(question.id)!] : question.responses }));
-  const latestResponses = projectedQuestions.map((question) => question.responses.at(-1));
-  const isTerminal = latestResponses.every((response) => response && response.result !== "needs_clarification");
-  const score = isTerminal ? latestResponses.filter((response) => response!.result === "correct").length : null;
+  const projectedQuestions = attempt.questions.map((question) => ({ ...question, response: newResponses.get(question.id) ?? question.response }));
+  const isTerminal = projectedQuestions.every((question) => question.response !== null);
+  const score = isTerminal ? projectedQuestions.filter((question) => question.response!.correct).length : null;
   const attemptStatus: QuizAttempt["status"] = !isTerminal ? "in_progress" : score === 5 ? "passed" : "failed";
   const nextStage: Course["currentStage"] = !isTerminal ? "quiz" : score === 5 ? "reflection" : "remediation";
   const projectedAttempt: QuizAttempt = { ...attempt, status: attemptStatus, score, gradedAt: isTerminal ? now : null, questions: projectedQuestions };
@@ -596,19 +620,19 @@ export function gradeQuiz(db: DatabaseHandle, dataRoot: string, input: { courseI
   const update = prepareMarkdownUpdate(dataRoot, course.id, [{ file: "progress.md", expectedSha256: course.progressMarkdownSha256, content: renderProgressMarkdown(projected, now) }]);
   commitPreparedUpdate(db, update, () => {
     const latestCourse = getCourse(db, course.id);
-    if (!latestCourse || latestCourse.status !== "active" || latestCourse.currentStage !== "quiz" || latestCourse.currentDayId !== day.id) throw new LearningStateError("Quiz grading state changed");
+    if (!latestCourse || latestCourse.status !== "active" || latestCourse.currentStage !== "quiz" || latestCourse.currentDayId !== day.id) throw new LearningStateError("Quiz answering state changed");
     assertRevision(latestCourse, input.expectedRevision);
     const latestAttempt = db.prepare("SELECT id, status FROM quiz_attempts WHERE day_id = ? ORDER BY attempt_number DESC LIMIT 1").get(day.id) as { id: string; status: QuizAttempt["status"] } | undefined;
     if (!latestAttempt || latestAttempt.id !== attempt.id || latestAttempt.status !== "in_progress") throw new LearningStateError("Attempt is no longer in progress");
-    const insert = db.prepare("INSERT INTO quiz_responses (id, attempt_id, question_id, response_number, answer, result, feedback, clarification_question, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    const insert = db.prepare("INSERT INTO quiz_responses (id, attempt_id, question_id, selected_choice_index, correct, created_at) VALUES (?, ?, ?, ?, ?, ?)");
     for (const response of newResponses.values()) {
-      const previous = db.prepare("SELECT result, response_number FROM quiz_responses WHERE question_id = ? ORDER BY response_number DESC LIMIT 1").get(response.questionId) as { result: QuizResponse["result"]; response_number: number } | undefined;
-      if ((previous && previous.result !== "needs_clarification") || response.responseNumber !== (previous?.response_number ?? 0) + 1) throw new LearningStateError("Question response state changed");
-      insert.run(response.id, attempt.id, response.questionId, response.responseNumber, response.answer, response.result, response.feedback, response.clarificationQuestion, response.createdAt);
+      const previous = db.prepare("SELECT id FROM quiz_responses WHERE question_id = ?").get(response.questionId) as { id: string } | undefined;
+      if (previous) throw new LearningStateError("Question response state changed");
+      insert.run(response.id, attempt.id, response.questionId, response.selectedChoiceIndex, response.correct ? 1 : 0, response.createdAt);
     }
-    const results = db.prepare("SELECT (SELECT response.result FROM quiz_responses AS response WHERE response.question_id = question.id ORDER BY response.response_number DESC LIMIT 1) AS result FROM quiz_questions AS question WHERE question.attempt_id = ? ORDER BY question.position").all(attempt.id) as { result: QuizResponse["result"] | null }[];
-    const storedTerminal = results.length === 5 && results.every(({ result }) => result !== null && result !== "needs_clarification");
-    const storedScore = storedTerminal ? results.filter(({ result }) => result === "correct").length : null;
+    const results = db.prepare("SELECT (SELECT response.correct FROM quiz_responses AS response WHERE response.question_id = question.id) AS correct FROM quiz_questions AS question WHERE question.attempt_id = ? ORDER BY question.position").all(attempt.id) as { correct: number | null }[];
+    const storedTerminal = results.length === 5 && results.every(({ correct }) => correct !== null);
+    const storedScore = storedTerminal ? results.filter(({ correct }) => correct === 1).length : null;
     if (storedTerminal !== isTerminal || storedScore !== score) throw new LearningStateError("Stored quiz results changed");
     if (storedTerminal) {
       db.prepare("UPDATE quiz_attempts SET status = ?, score = ?, graded_at = ? WHERE id = ? AND status = 'in_progress'").run(attemptStatus, storedScore, now, attempt.id);
@@ -616,7 +640,7 @@ export function gradeQuiz(db: DatabaseHandle, dataRoot: string, input: { courseI
         db.prepare("UPDATE day_concepts SET status = 'understood', updated_at = ? WHERE day_id = ? AND status = 'remediation'").run(now, day.id);
       } else if (storedScore !== 5) {
         const upsert = db.prepare("INSERT INTO day_concepts (day_id, concept_key, label, status, updated_at) VALUES (?, ?, ?, 'remediation', ?) ON CONFLICT(day_id, concept_key) DO UPDATE SET label = excluded.label, status = 'remediation', updated_at = excluded.updated_at");
-        for (const question of projectedQuestions) if (question.responses.at(-1)!.result === "incorrect") upsert.run(day.id, question.conceptKey, question.conceptLabel, now);
+        for (const question of projectedQuestions) if (!question.response!.correct) upsert.run(day.id, question.conceptKey, question.conceptLabel, now);
       }
     }
     const changed = db.prepare("UPDATE courses SET current_stage = ?, progress_markdown_sha256 = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?").run(nextStage, update.checksums["progress.md"]!, now, course.id, input.expectedRevision);
@@ -804,8 +828,8 @@ type ResearchSourceRow = { id: string; url: string; title: string; publisher: st
 type ResearchClaimRow = { id: string; statement: string; major: number; conclusion: string; uncertainty: string | null };
 type EvidenceRow = { source_id: string; stance: "supports" | "opposes" | "context" };
 type AttemptRow = { id: string; attempt_number: number; status: "in_progress" | "passed" | "failed"; score: number | null; created_at: string; graded_at: string | null };
-type QuestionRow = { id: string; position: number; concept_key: string; concept_label: string; prompt: string; grading_criteria: string };
-type ResponseRow = { id: string; question_id: string; response_number: number; answer: string; result: "correct" | "incorrect" | "needs_clarification"; feedback: string; clarification_question: string | null; created_at: string };
+type QuestionRow = { id: string; position: number; concept_key: string; concept_label: string; prompt: string; choices: string; correct_choice_index: number; explanation: string };
+type ResponseRow = { id: string; question_id: string; selected_choice_index: number; correct: number; created_at: string };
 
 function loadResearchRuns(db: DatabaseHandle, runRows: readonly ResearchRunRow[]): ResearchRun[] {
   return runRows.map((run): ResearchRun => {
@@ -856,7 +880,7 @@ function loadQuizAttempts<Row extends AttemptRow>(
   attemptRows: readonly Row[],
 ): (QuizAttempt & { row: Row })[] {
   return attemptRows.map((attempt) => {
-    const questions = db.prepare(`SELECT id, position, concept_key, concept_label, prompt, grading_criteria FROM quiz_questions WHERE attempt_id = ? ORDER BY position`).all(attempt.id) as QuestionRow[];
+    const questions = db.prepare(`SELECT id, position, concept_key, concept_label, prompt, choices, correct_choice_index, explanation FROM quiz_questions WHERE attempt_id = ? ORDER BY position`).all(attempt.id) as QuestionRow[];
     return {
       row: attempt,
       id: attempt.id,
@@ -871,18 +895,19 @@ function loadQuizAttempts<Row extends AttemptRow>(
         conceptKey: question.concept_key,
         conceptLabel: question.concept_label,
         prompt: question.prompt,
-        gradingCriteria: question.grading_criteria,
-        responses: (db.prepare(`SELECT id, question_id, response_number, answer, result, feedback, clarification_question, created_at FROM quiz_responses WHERE question_id = ? ORDER BY response_number`).all(question.id) as ResponseRow[])
-          .map((response) => ({
-            id: response.id,
-            questionId: response.question_id,
-            responseNumber: response.response_number,
-            answer: response.answer,
-            result: response.result,
-            feedback: response.feedback,
-            clarificationQuestion: response.clarification_question,
-            createdAt: response.created_at,
-          })),
+        choices: JSON.parse(question.choices) as string[],
+        correctChoiceIndex: question.correct_choice_index,
+        explanation: question.explanation,
+        response: ((): QuizResponse | null => {
+          const row = db.prepare(`SELECT id, question_id, selected_choice_index, correct, created_at FROM quiz_responses WHERE question_id = ?`).get(question.id) as ResponseRow | undefined;
+          return row === undefined ? null : {
+            id: row.id,
+            questionId: row.question_id,
+            selectedChoiceIndex: row.selected_choice_index,
+            correct: row.correct === 1,
+            createdAt: row.created_at,
+          };
+        })(),
       })),
     };
   });

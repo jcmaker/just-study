@@ -47,21 +47,22 @@ Before `approve_outline` or `record_daily_research`, use simple unique local key
 1. If the current Day has no Day research, define its questions and criteria, browse actual sources, cross-check claims, and call `record_daily_research`.
 2. Teach recall, precise explanation, ELI5, analogy, worked example, application, and an understanding interview.
 3. Ask one understanding question at a time. Record only content actually taught and the user's demonstrated concept status with `save_checkpoint`. Every lecture-stage `save_checkpoint` call must include both `understoodConcepts` and `remediationConcepts` — use empty arrays before any concept status is known — and must never include `remediationMarkdown`.
-4. When the seven parts are complete, create exactly five distinct questions before showing any of them. Call `start_quiz`, then present the first saved question.
+4. When the seven parts are complete, write exactly five multiple-choice questions before showing any of them. Each needs four distinct single-line choices, the zero-based `correctChoiceIndex`, and an `explanation` the learner sees after answering. Make every wrong choice a plausible mistake, not filler. Call `start_quiz`, then present the first saved question.
 
 ### Quiz
 
-1. Read the saved current attempt and ask the first unanswered saved question.
-2. Grade only the user's actual answer against the saved criterion.
-3. If ambiguous, use `needs_clarification` with one specific clarification question; ask it and grade the follow-up on the next revision.
-4. Call `grade_quiz` after each supplied answer. Continue with the saved next unanswered question.
-5. A score of 5/5 moves to reflection. Any lower terminal score moves to remediation.
+1. Read the saved current attempt and present the first question that has no `response`.
+2. Show the saved `choices` exactly as stored, numbered 1 to 4 in stored order. Never reorder, reword, add, or drop a choice, and never reveal `correctChoiceIndex` before the learner answers.
+3. Take the learner's pick and call `answer_quiz` with its zero-based `selectedChoiceIndex`. Never answer on the learner's behalf.
+4. **The server grades.** It compares the pick against the stored answer key and returns the result. Report only what it returned; never state a result you decided yourself. Then present the saved `explanation` and move to the next unanswered question.
+5. A question can be answered once. There is no clarification round — an unclear question is a question you should have written better.
+6. A score of 5/5 moves to reflection. Any lower terminal score moves to remediation.
 
 ### Remediation
 
 1. Explain each saved remediation concept in a materially different way with a new analogy or example.
 2. Save only `remediationMarkdown` with `save_checkpoint`; a remediation-stage checkpoint must omit both `understoodConcepts` and `remediationConcepts`. Lecture and remediation checkpoints take mutually exclusive shapes — never mix them.
-3. Create five new prompts that cover every remediation concept and do not repeat an earlier prompt. Call `start_remediation_quiz` and return to the quiz flow.
+3. Write five new multiple-choice questions that cover every remediation concept and repeat no earlier prompt. Same shape as the first quiz: four distinct choices, a `correctChoiceIndex`, and an `explanation`. Call `start_remediation_quiz` and return to the quiz flow.
 
 ### Reflection
 
