@@ -6,6 +6,7 @@ import {
   createCourseAction,
   type CreateCourseState,
 } from "./actions.ts";
+import { buttonClass } from "./ui/primitives.tsx";
 
 const initialState: CreateCourseState = { error: null };
 
@@ -31,6 +32,7 @@ export function CourseFormView({
       <input
         autoFocus={autoFocus}
         id="course-title"
+        className="tap-target w-full bw border-input radius-md bg-background px-3 py-2 text-foreground"
         name="title"
         minLength={1}
         maxLength={120}
@@ -39,6 +41,7 @@ export function CourseFormView({
       <label htmlFor="course-goal">30일 뒤 학습 목표</label>
       <textarea
         id="course-goal"
+        className="w-full bw border-input radius-md bg-background px-3 py-2 text-foreground"
         name="goal"
         minLength={1}
         maxLength={2000}
@@ -50,7 +53,7 @@ export function CourseFormView({
           {state.error}
         </p>
       ) : null}
-      <button type="submit" disabled={pending}>
+      <button type="submit" className={buttonClass("primary")} disabled={pending}>
         {pending ? "생성 중…" : "과정 만들기"}
       </button>
     </form>

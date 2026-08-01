@@ -1556,6 +1556,29 @@ test("new-course form gives its title field initial focus", async () => {
   assert.match(html, /<input[^>]*autofocus=""[^>]*name="title"/);
 });
 
+test("new-course visible controls use the 44px tokenized contract", async () => {
+  const { CourseFormView } = await import("../src/app/course-form.tsx");
+  const html = renderToStaticMarkup(
+    createElement(CourseFormView, {
+      action: "/",
+      pending: false,
+      requestId: "90000000-0000-4000-8000-000000000024",
+      state: { error: null },
+    }),
+  );
+  const title = /<input[^>]*name="title"[^>]*\/>/.exec(html)?.[0] ?? "";
+  const submit = /<button[^>]*type="submit"[^>]*>과정 만들기<\/button>/.exec(html)?.[0] ?? "";
+
+  for (const control of [title, submit]) {
+    assert.match(control, /\btap-target\b/);
+    assert.match(control, /\bbw\b/);
+    assert.match(control, /\bradius-md\b/);
+  }
+  assert.match(title, /\bborder-input\b/);
+  assert.match(title, /\bbg-background\b/);
+  assert.match(submit, /\bbg-primary\b/);
+});
+
 test("new-course panels use labelled native dialogs with independent openers", async () => {
   const { NewCoursePanel } = await import("../src/app/new-course-panel.tsx");
   const html = renderToStaticMarkup(
