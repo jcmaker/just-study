@@ -52,6 +52,7 @@ import {
   recordDailyResearch,
   saveLearningCheckpoint,
   startQuiz,
+  startRemediationQuiz,
   updateCourseDraft,
 } from "../src/server/learning.ts";
 import { renderApprovedCourseMarkdown } from "../src/server/learning-markdown.ts";
@@ -1395,4 +1396,221 @@ test("a draft action rejects missing or blank revisions without mutating the cou
     else runtimeGlobal.__justStudyRuntime = previousRuntime;
     rmSync(dataRoot, { recursive: true, force: true });
   }
+});
+
+test("reflection cannot bypass stage, quiz mastery, or Day 30 termination", () => {
+  withRuntime((db, dataRoot) => {
+    const approved = approve(db, dataRoot, "회고 검증", [
+      "https://reflect.example.edu/a",
+      "https://reflect.example.org/b",
+    ]);
+    const courseId = approved.course.id;
+    const reflection = { learned: "배운 점", confusing: "헷갈린 점", feeling: "느낀 점" };
+
+    assert.throws(
+      () => completeDay(db, dataRoot, { courseId, expectedRevision: approved.course.revision, reflection }),
+      LearningStateError,
+    );
+
+    let state = recordDailyResearch(db, dataRoot, {
+      courseId,
+      expectedRevision: approved.course.revision,
+      research: research("회고-day-1", ["https://r1.example.edu/a", "https://r1.example.org/b"]),
+    });
+    state = saveLearningCheckpoint(db, dataRoot, {
+      courseId,
+      expectedRevision: state.course.revision,
+      lesson,
+      understoodConcepts: [{ key: "reflect-known", label: "이해 개념" }],
+      remediationConcepts: [],
+    });
+    const list = questions("reflect");
+    state = startQuiz(db, dataRoot, { courseId, expectedRevision: state.course.revision, questions: list });
+    const attemptId = state.quizAttempts.at(-1)!.id;
+    state = gradeQuiz(db, dataRoot, {
+      courseId,
+      expectedRevision: state.course.revision,
+      attemptId,
+      grades: grades(list, 2),
+    });
+    assert.equal(state.course.currentStage, "remediation");
+    assert.throws(
+      () => completeDay(db, dataRoot, { courseId, expectedRevision: state.course.revision, reflection }),
+      LearningStateError,
+    );
+
+    assert.throws(
+      () => completeDay(db, dataRoot, { courseId, expectedRevision: state.course.revision, reflection: { learned: "", confusing: "b", feeling: "c" } }),
+      LearningValidationError,
+    );
+
+    let revision = state.course.revision;
+    for (let day = 1; day <= 30; day += 1) {
+      if (day === 1) {
+        // Finish the remediation cycle already in progress for Day 1.
+        let inner = saveLearningCheckpoint(db, dataRoot, {
+          courseId,
+          expectedRevision: revision,
+          lesson: { remediationMarkdown: "다른 예제로 다시 설명한다." },
+        });
+        const second = questions("reflect-remediation");
+        second[2] = { ...second[2]!, conceptKey: list[2]!.conceptKey, conceptLabel: list[2]!.conceptLabel };
+        inner = startRemediationQuiz(db, dataRoot, {
+          courseId,
+          expectedRevision: inner.course.revision,
+          remediationMarkdown: "새 예제로 다시 적용한다.",
+          questions: second,
+        });
+        const secondAttempt = inner.quizAttempts.at(-1)!.id;
+        inner = gradeQuiz(db, dataRoot, {
+          courseId,
+          expectedRevision: inner.course.revision,
+          attemptId: secondAttempt,
+          grades: grades(second, null),
+        });
+        assert.equal(inner.course.currentStage, "reflection");
+        inner = completeDay(db, dataRoot, { courseId, expectedRevision: inner.course.revision, reflection });
+        revision = inner.course.revision;
+        continue;
+      }
+      revision = completeCurrentDay(db, dataRoot, courseId, revision, `reflect-day-${day}`);
+    }
+
+    const final = getCourseHistory(db, courseId)!;
+    assert.equal(final.course.status, "completed");
+    assert.equal(final.course.currentDayId, null);
+    assert.equal(final.course.currentStage, null);
+    assert.equal(final.days.length, 30);
+    assert.throws(
+      () => completeDay(db, dataRoot, { courseId, expectedRevision: final.course.revision, reflection }),
+      LearningStateError,
+    );
+  });
+});
+
+test("reflection form constrains fields and preserves submitted answers across outcomes", async () => {
+  const { ReflectionFormView } = await import("../src/app/reflection-form.tsx");
+  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const fields = [
+    { key: "learned", label: "오늘 무엇을 배웠나요?" },
+    { key: "confusing", label: "아직 헷갈리는 것은 무엇인가요?" },
+    { key: "feeling", label: "오늘 공부에 대한 한 줄 소감은 무엇인가요?" },
+  ] as const;
+
+  const renderForm = (
+    state: {
+      status: "idle" | "saved" | "error" | "conflict";
+      message: string | null;
+      learned: string;
+      confusing: string;
+      feeling: string;
+    },
+    revision = 5,
+    pending = false,
+  ) =>
+    renderToStaticMarkup(
+      createElement(ReflectionFormView, {
+        action: "/courses/reflection",
+        courseId: "course-reflect",
+        revision,
+        state,
+        pending,
+        onRefresh() {},
+      }),
+    );
+
+  const idle = renderForm({
+    status: "idle",
+    message: null,
+    learned: "",
+    confusing: "",
+    feeling: "",
+  });
+  assert.match(idle, /name="courseId" value="course-reflect"/);
+  assert.match(idle, /name="expectedRevision" value="5"/);
+
+  for (const { key, label } of fields) {
+    const textarea = idle.match(
+      new RegExp(`<textarea[^>]*id="reflection-${key}"[^>]*>[^<]*</textarea>`),
+    )?.[0];
+    assert.ok(textarea, key);
+    for (const attribute of [
+      new RegExp(`name="${key}"`),
+      /required=""/,
+      /minLength="1"/,
+      /maxLength="10000"/,
+      /rows="3"/,
+      new RegExp(`aria-describedby="reflection-${key}-help"`),
+    ]) {
+      assert.match(textarea!, attribute);
+    }
+    assert.match(textarea!, /><\/textarea>$/);
+    assert.match(
+      idle,
+      new RegExp(`<label[^>]*for="reflection-${key}"[^>]*>${escapeRegExp(label)}</label>`),
+    );
+  }
+  assert.match(idle, /<p[^>]*aria-live="polite"[^>]*><\/p>/);
+  assert.match(idle, /<button[^>]*type="submit"[^>]*>회고 제출하고 다음 Day로<\/button>/);
+  // buttonClass() always emits Tailwind `disabled:` variants, so assert on the rendered attribute.
+  assert.doesNotMatch(idle, /disabled=""/);
+
+  const error = renderForm({
+    status: "error",
+    message: "회고를 저장하지 못했습니다.",
+    learned: "입력한 배운 점",
+    confusing: "입력한 헷갈린 점",
+    feeling: "입력한 소감",
+  });
+  assert.match(error, />입력한 배운 점<\/textarea>/);
+  assert.match(error, />입력한 헷갈린 점<\/textarea>/);
+  assert.match(error, />입력한 소감<\/textarea>/);
+  assert.match(error, /role="alert"[^>]*>회고를 저장하지 못했습니다\.<\/p>/);
+  assert.match(error, /<p[^>]*aria-live="polite"[^>]*><\/p>/);
+
+  const conflict = renderForm({
+    status: "conflict",
+    message: "최신 상태와 충돌했습니다.",
+    learned: "보존할 배운 점",
+    confusing: "보존할 헷갈린 점",
+    feeling: "보존할 소감",
+  });
+  assert.match(conflict, />보존할 배운 점<\/textarea>/);
+  assert.match(conflict, />보존할 헷갈린 점<\/textarea>/);
+  assert.match(conflict, />보존할 소감<\/textarea>/);
+  assert.match(conflict, /role="alert"/);
+  assert.match(conflict, /최신 상태와 충돌했습니다\./);
+  assert.match(
+    conflict,
+    /<button[^>]*type="button"[^>]*class="[^"]*tap-target[^"]*"[^>]*>최신 상태 불러오기<\/button>/,
+  );
+  assert.match(conflict, /<p[^>]*aria-live="polite"[^>]*><\/p>/);
+
+  const saved = renderForm({
+    status: "saved",
+    message: "회고를 저장했습니다.",
+    learned: "제출한 배운 점",
+    confusing: "제출한 헷갈린 점",
+    feeling: "제출한 소감",
+  });
+  for (const { key } of fields) {
+    assert.match(saved, new RegExp(`<textarea[^>]*id="reflection-${key}"[^>]*></textarea>`));
+  }
+  assert.doesNotMatch(saved, /제출한 배운 점/);
+  assert.doesNotMatch(saved, /제출한 헷갈린 점/);
+  assert.doesNotMatch(saved, /제출한 소감/);
+  assert.match(
+    saved,
+    /<p[^>]*aria-live="polite"[^>]*>회고를 저장했습니다\.<\/p>/,
+  );
+
+  const pendingRendered = renderForm(
+    { status: "idle", message: null, learned: "", confusing: "", feeling: "" },
+    5,
+    true,
+  );
+  assert.match(
+    pendingRendered,
+    /<button[^>]*type="submit"[^>]*disabled=""[^>]*>제출 중…<\/button>/,
+  );
 });

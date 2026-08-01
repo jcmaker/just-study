@@ -362,12 +362,13 @@ export function QuizPanel({ history }: { history: CourseHistory }) {
   );
 }
 
-export function TodayPanel({ course, history, snapshot, verified, unavailable }: {
+export function TodayPanel({ course, history, snapshot, verified, unavailable, reflection }: {
   course: CourseHistoryCourse;
   history: CourseHistory;
   snapshot: LearningSnapshot | null;
   verified: boolean;
   unavailable: boolean;
+  reflection?: ReactNode;
 }) {
   const currentDay = snapshot?.currentDay ?? history.days.find(({ id }) => id === course.currentDayId) ?? null;
   const sources = history.researchRuns
@@ -383,6 +384,15 @@ export function TodayPanel({ course, history, snapshot, verified, unavailable }:
           </p>
           <p className="mt-2 mb-0 text-sm text-muted-foreground">단계: {course.currentStage === null ? "없음" : STAGE_LABELS[course.currentStage]}</p>
         </Card>
+        {reflection ? (
+          <Card>
+            <h3 className="mt-0 mb-2 text-base font-bold">오늘의 회고</h3>
+            <p className="mt-0 mb-3 text-sm text-muted-foreground">
+              세 답변을 모두 제출하면 학습 기록에 저장되고 다음 Day로 이동합니다. 제출 전에는 저장되지 않습니다.
+            </p>
+            {reflection}
+          </Card>
+        ) : null}
         <DocumentPanel
           markdown={snapshot?.documents.currentDay ?? null}
           verified={verified}
