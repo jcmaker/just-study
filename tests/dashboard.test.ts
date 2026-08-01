@@ -163,8 +163,8 @@ test("dashboard overview aggregates only stored learning facts", () => {
     ]);
     completeCurrentDay(db, dataRoot, active.course.id, active.course.revision, "day-1");
 
-    // A second course cites the same source in canonical form. Five selected rows,
-    // four distinct normalized URLs. Without normalization this assertion reads 5.
+    // A second course cites the same source in canonical form. Six selected rows,
+    // four distinct normalized URLs. Without normalization this assertion reads 6.
     approve(db, dataRoot, "중복 출처", [
       "https://example.edu/foundations",
       "https://standards.example.org/curriculum",
