@@ -795,25 +795,186 @@ type AttemptRow = { id: string; attempt_number: number; status: "in_progress" | 
 type QuestionRow = { id: string; position: number; concept_key: string; concept_label: string; prompt: string; grading_criteria: string };
 type ResponseRow = { id: string; question_id: string; response_number: number; answer: string; result: "correct" | "incorrect" | "needs_clarification"; feedback: string; clarification_question: string | null; created_at: string };
 
+function loadResearchRuns(db: DatabaseHandle, runRows: readonly ResearchRunRow[]): ResearchRun[] {
+  return runRows.map((run): ResearchRun => {
+    const sourceRows = db.prepare(`SELECT * FROM research_sources WHERE run_id = ? ORDER BY rank`).all(run.id) as ResearchSourceRow[];
+    const claimRows = db.prepare(`SELECT id, statement, major, conclusion, uncertainty FROM research_claims WHERE run_id = ? ORDER BY id`).all(run.id) as ResearchClaimRow[];
+    return {
+      id: run.id,
+      scope: run.scope,
+      dayId: run.day_id,
+      questions: JSON.parse(run.questions_json) as string[],
+      topicCriteria: JSON.parse(run.topic_criteria_json) as string[],
+      sources: sourceRows.map((source) => ({
+        id: source.id,
+        url: source.url,
+        title: source.title,
+        publisher: source.publisher,
+        independenceKey: source.independence_key,
+        scores: {
+          authority: source.authority_score,
+          crossValidation: source.cross_validation_score,
+          relevance: source.relevance_score,
+          teachingQuality: source.teaching_quality_score,
+          currency: source.currency_score,
+          accessibility: source.accessibility_score,
+        },
+        totalScore: source.total_score,
+        rank: source.rank,
+        selected: source.selected === 1,
+        selectionReason: source.selection_reason,
+        limitation: source.limitation,
+      })),
+      claims: claimRows.map((claim) => ({
+        id: claim.id,
+        statement: claim.statement,
+        major: claim.major === 1,
+        conclusion: claim.conclusion,
+        uncertainty: claim.uncertainty,
+        evidence: (db.prepare(`SELECT source_id, stance FROM research_claim_evidence WHERE run_id = ? AND claim_id = ? ORDER BY source_id, stance`).all(run.id, claim.id) as EvidenceRow[])
+          .map((evidence) => ({ sourceId: evidence.source_id, stance: evidence.stance })),
+      })),
+      createdAt: run.created_at,
+    };
+  });
+}
+
+function loadQuizAttempts<Row extends AttemptRow>(
+  db: DatabaseHandle,
+  attemptRows: readonly Row[],
+): (QuizAttempt & { row: Row })[] {
+  return attemptRows.map((attempt) => {
+    const questions = db.prepare(`SELECT id, position, concept_key, concept_label, prompt, grading_criteria FROM quiz_questions WHERE attempt_id = ? ORDER BY position`).all(attempt.id) as QuestionRow[];
+    return {
+      row: attempt,
+      id: attempt.id,
+      attemptNumber: attempt.attempt_number,
+      status: attempt.status,
+      score: attempt.score,
+      createdAt: attempt.created_at,
+      gradedAt: attempt.graded_at,
+      questions: questions.map((question) => ({
+        id: question.id,
+        position: question.position,
+        conceptKey: question.concept_key,
+        conceptLabel: question.concept_label,
+        prompt: question.prompt,
+        gradingCriteria: question.grading_criteria,
+        responses: (db.prepare(`SELECT id, question_id, response_number, answer, result, feedback, clarification_question, created_at FROM quiz_responses WHERE question_id = ? ORDER BY response_number`).all(question.id) as ResponseRow[])
+          .map((response) => ({
+            id: response.id,
+            questionId: response.question_id,
+            responseNumber: response.response_number,
+            answer: response.answer,
+            result: response.result,
+            feedback: response.feedback,
+            clarificationQuestion: response.clarification_question,
+            createdAt: response.created_at,
+          })),
+      })),
+    };
+  });
+}
+
 export function getLearningSnapshot(db: DatabaseHandle, dataRoot: string, courseId: string): LearningSnapshot | null {
   const course = getCourse(db, courseId); if (!course) return null;
   const days = (db.prepare(`SELECT id, day_number, objective, completed_at FROM course_days WHERE course_id = ? ORDER BY day_number`).all(courseId) as DayRow[]).map((row) => ({ id: row.id, dayNumber: row.day_number, objective: row.objective, completedAt: row.completed_at }));
   const currentDay = course.currentDayId === null ? null : days.find(({ id }) => id === course.currentDayId) ?? null;
   if (course.currentDayId !== null && currentDay === null) throw new LearningStateError("Current Day is missing");
   const runRows = db.prepare(`SELECT id, scope, day_id, questions_json, topic_criteria_json, created_at FROM research_runs WHERE course_id = ? AND (scope = 'course' OR day_id = ?) ORDER BY CASE scope WHEN 'course' THEN 0 ELSE 1 END, created_at, id`).all(courseId, currentDay?.id ?? null) as ResearchRunRow[];
-  const researchRuns = runRows.map((run): ResearchRun => {
-    const sourceRows = db.prepare(`SELECT * FROM research_sources WHERE run_id = ? ORDER BY rank`).all(run.id) as ResearchSourceRow[];
-    const claimRows = db.prepare(`SELECT id, statement, major, conclusion, uncertainty FROM research_claims WHERE run_id = ? ORDER BY id`).all(run.id) as ResearchClaimRow[];
-    return { id: run.id, scope: run.scope, dayId: run.day_id, questions: JSON.parse(run.questions_json) as string[], topicCriteria: JSON.parse(run.topic_criteria_json) as string[], sources: sourceRows.map((source) => ({ id: source.id, url: source.url, title: source.title, publisher: source.publisher, independenceKey: source.independence_key, scores: { authority: source.authority_score, crossValidation: source.cross_validation_score, relevance: source.relevance_score, teachingQuality: source.teaching_quality_score, currency: source.currency_score, accessibility: source.accessibility_score }, totalScore: source.total_score, rank: source.rank, selected: source.selected === 1, selectionReason: source.selection_reason, limitation: source.limitation })), claims: claimRows.map((claim) => ({ id: claim.id, statement: claim.statement, major: claim.major === 1, conclusion: claim.conclusion, uncertainty: claim.uncertainty, evidence: (db.prepare(`SELECT source_id, stance FROM research_claim_evidence WHERE run_id = ? AND claim_id = ? ORDER BY source_id, stance`).all(run.id, claim.id) as EvidenceRow[]).map((evidence) => ({ sourceId: evidence.source_id, stance: evidence.stance })) })), createdAt: run.created_at };
-  });
+  const researchRuns = loadResearchRuns(db, runRows);
   const conceptRows = currentDay === null ? [] : db.prepare(`SELECT concept_key, label, status FROM day_concepts WHERE day_id = ? ORDER BY concept_key`).all(currentDay.id) as { concept_key: string; label: string; status: "understood" | "remediation" }[];
   const attemptRows = currentDay === null ? [] : db.prepare(`SELECT id, attempt_number, status, score, created_at, graded_at FROM quiz_attempts WHERE day_id = ? ORDER BY attempt_number`).all(currentDay.id) as AttemptRow[];
-  const quizAttempts = attemptRows.map((attempt): QuizAttempt => {
-    const questions = db.prepare(`SELECT id, position, concept_key, concept_label, prompt, grading_criteria FROM quiz_questions WHERE attempt_id = ? ORDER BY position`).all(attempt.id) as QuestionRow[];
-    return { id: attempt.id, attemptNumber: attempt.attempt_number, status: attempt.status, score: attempt.score, createdAt: attempt.created_at, gradedAt: attempt.graded_at, questions: questions.map((question) => ({ id: question.id, position: question.position, conceptKey: question.concept_key, conceptLabel: question.concept_label, prompt: question.prompt, gradingCriteria: question.grading_criteria, responses: (db.prepare(`SELECT id, question_id, response_number, answer, result, feedback, clarification_question, created_at FROM quiz_responses WHERE question_id = ? ORDER BY response_number`).all(question.id) as ResponseRow[]).map((response) => ({ id: response.id, questionId: response.question_id, responseNumber: response.response_number, answer: response.answer, result: response.result, feedback: response.feedback, clarificationQuestion: response.clarification_question, createdAt: response.created_at })) })) };
+  const quizAttempts = loadQuizAttempts(db, attemptRows).map(({ row, ...attempt }) => {
+    void row;
+    return attempt;
   });
   const readOptional = (path: string | null, checksum: string | null): string | null => { if (path === null && checksum === null) return null; if (path === null || checksum === null) throw new LearningStateError("Document registration is incomplete"); return readVerifiedMarkdown(dataRoot, path, checksum); };
   return { course, days, currentDay, researchRuns, understoodConcepts: conceptRows.filter(({ status }) => status === "understood").map(({ concept_key, label }) => ({ key: concept_key, label })), remediationConcepts: conceptRows.filter(({ status }) => status === "remediation").map(({ concept_key, label }) => ({ key: concept_key, label })), quizAttempts, documents: { course: readVerifiedMarkdown(dataRoot, course.markdownPath, course.markdownSha256), progress: readOptional(course.progressMarkdownPath, course.progressMarkdownSha256), journal: readOptional(course.journalMarkdownPath, course.journalMarkdownSha256), currentDay: readOptional(course.currentDayMarkdownPath, course.currentDayMarkdownSha256) } };
+}
+
+export type CourseHistoryResearchRun = ResearchRun & {
+  dayNumber: number | null;
+  dayObjective: string | null;
+};
+
+export type CourseHistoryQuizAttempt = QuizAttempt & {
+  dayId: string;
+  dayNumber: number;
+  dayObjective: string;
+};
+
+/** Course facts the UI may see: no Markdown path and no checksum. */
+export type CourseHistoryCourse = Omit<
+  Course,
+  | "markdownPath"
+  | "markdownSha256"
+  | "progressMarkdownPath"
+  | "progressMarkdownSha256"
+  | "journalMarkdownPath"
+  | "journalMarkdownSha256"
+  | "currentDayMarkdownPath"
+  | "currentDayMarkdownSha256"
+>;
+
+export type CourseHistory = {
+  course: CourseHistoryCourse;
+  days: LearningDay[];
+  researchRuns: CourseHistoryResearchRun[];
+  quizAttempts: CourseHistoryQuizAttempt[];
+};
+
+export function getCourseHistory(db: DatabaseHandle, courseId: string): CourseHistory | null {
+  const stored = getCourse(db, courseId);
+  if (!stored) return null;
+  const {
+    markdownPath: _markdownPath,
+    markdownSha256: _markdownSha256,
+    progressMarkdownPath: _progressMarkdownPath,
+    progressMarkdownSha256: _progressMarkdownSha256,
+    journalMarkdownPath: _journalMarkdownPath,
+    journalMarkdownSha256: _journalMarkdownSha256,
+    currentDayMarkdownPath: _currentDayMarkdownPath,
+    currentDayMarkdownSha256: _currentDayMarkdownSha256,
+    ...course
+  } = stored;
+  void [_markdownPath, _markdownSha256, _progressMarkdownPath, _progressMarkdownSha256, _journalMarkdownPath, _journalMarkdownSha256, _currentDayMarkdownPath, _currentDayMarkdownSha256];
+
+  const days = (db.prepare(`
+    SELECT id, day_number, objective, completed_at FROM course_days WHERE course_id = ? ORDER BY day_number
+  `).all(courseId) as DayRow[]).map((row) => ({
+    id: row.id,
+    dayNumber: row.day_number,
+    objective: row.objective,
+    completedAt: row.completed_at,
+  }));
+  const dayById = new Map(days.map((day) => [day.id, day]));
+
+  const runRows = db.prepare(`
+    SELECT id, scope, day_id, questions_json, topic_criteria_json, created_at
+    FROM research_runs WHERE course_id = ?
+    ORDER BY CASE scope WHEN 'course' THEN 0 ELSE 1 END, created_at, id
+  `).all(courseId) as ResearchRunRow[];
+  const researchRuns = loadResearchRuns(db, runRows).map((run): CourseHistoryResearchRun => {
+    const day = run.dayId === null ? undefined : dayById.get(run.dayId);
+    return { ...run, dayNumber: day?.dayNumber ?? null, dayObjective: day?.objective ?? null };
+  });
+
+  const attemptRows = db.prepare(`
+    SELECT attempt.id, attempt.attempt_number, attempt.status, attempt.score,
+           attempt.created_at, attempt.graded_at, attempt.day_id
+    FROM quiz_attempts AS attempt
+    JOIN course_days AS day ON day.id = attempt.day_id
+    WHERE day.course_id = ?
+    ORDER BY day.day_number, attempt.attempt_number
+  `).all(courseId) as (AttemptRow & { day_id: string })[];
+  const quizAttempts = loadQuizAttempts(db, attemptRows).map(({ row, ...attempt }): CourseHistoryQuizAttempt => {
+    const day = dayById.get(row.day_id);
+    if (!day) throw new LearningStateError("Quiz attempt Day is missing");
+    return { ...attempt, dayId: row.day_id, dayNumber: day.dayNumber, dayObjective: day.objective };
+  });
+
+  return { course, days, researchRuns, quizAttempts };
 }
 
 export type LearningDocumentName = "course" | "progress" | "journal" | "current-day";

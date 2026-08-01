@@ -11,6 +11,7 @@ import {
   approveOutline,
   completeDay,
   gradeQuiz,
+  getCourseHistory,
   recordDailyResearch,
   saveLearningCheckpoint,
   startQuiz,
@@ -259,5 +260,74 @@ test("dashboard overview reports an in-progress quiz response and keeps recent D
     assert.equal(summary.completedDayCount, 6);
     assert.equal(overview.recentDays.length, 5);
     assert.deepEqual(overview.recentDays.map(({ dayNumber }) => dayNumber), [6, 5, 4, 3, 2]);
+  });
+});
+
+test("course history returns every research run and quiz attempt with Day context", () => {
+  withRuntime((db, dataRoot) => {
+    const approved = approve(db, dataRoot, "알고리즘", [
+      "https://algo.example.edu/basics",
+      "https://algo.example.org/standard",
+    ]);
+    const courseId = approved.course.id;
+    completeCurrentDay(db, dataRoot, courseId, approved.course.revision, "algo-day-1");
+
+    const history = getCourseHistory(db, courseId)!;
+    assert.equal(history.course.id, courseId);
+    assert.equal(history.days.length, 30);
+    assert.equal(history.days[0]!.completedAt !== null, true);
+
+    const courseRun = history.researchRuns.find(({ scope }) => scope === "course")!;
+    assert.equal(courseRun.dayNumber, null);
+    assert.equal(courseRun.dayObjective, null);
+    assert.equal(courseRun.sources.length, 2);
+    assert.equal(courseRun.sources[0]!.totalScore, 94);
+    assert.equal(courseRun.claims[0]!.evidence.length, 2);
+
+    const dayRun = history.researchRuns.find(({ scope }) => scope === "day")!;
+    assert.equal(dayRun.dayNumber, 1);
+    assert.equal(dayRun.dayObjective, "알고리즘 목표 1을 설명한다");
+
+    assert.equal(history.quizAttempts.length, 1);
+    const attempt = history.quizAttempts[0]!;
+    assert.equal(attempt.dayNumber, 1);
+    assert.equal(attempt.dayObjective, "알고리즘 목표 1을 설명한다");
+    assert.equal(attempt.status, "passed");
+    assert.equal(attempt.score, 5);
+    assert.equal(attempt.questions.length, 5);
+    assert.equal(attempt.questions[0]!.responses.length, 1);
+    assert.equal(attempt.questions[0]!.responses[0]!.result, "correct");
+
+    assert.equal(getCourseHistory(db, crypto.randomUUID()), null);
+    assert.equal(/sha256/i.test(JSON.stringify(history)), false);
+    assert.equal(/markdownPath/i.test(JSON.stringify(history)), false);
+    assert.deepEqual(
+      Object.keys(history.course).filter((key) => /sha256|markdownPath/i.test(key)),
+      [],
+    );
+  });
+});
+
+test("course history keeps returning history after a course completes", () => {
+  withRuntime((db, dataRoot) => {
+    const approved = approve(db, dataRoot, "짧은 과정", [
+      "https://short.example.edu/a",
+      "https://short.example.org/b",
+    ]);
+    const courseId = approved.course.id;
+    let revision = approved.course.revision;
+    for (let day = 1; day <= 30; day += 1) {
+      revision = completeCurrentDay(db, dataRoot, courseId, revision, `short-day-${day}`);
+    }
+
+    const history = getCourseHistory(db, courseId)!;
+    assert.equal(history.course.status, "completed");
+    assert.equal(history.days.every(({ completedAt }) => completedAt !== null), true);
+    assert.equal(history.researchRuns.filter(({ scope }) => scope === "day").length, 30);
+    assert.equal(history.quizAttempts.length, 30);
+    assert.deepEqual(
+      history.quizAttempts.map(({ dayNumber }) => dayNumber),
+      Array.from({ length: 30 }, (_, index) => index + 1),
+    );
   });
 });
