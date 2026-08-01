@@ -41,11 +41,10 @@ function renderRubric(): string {
   return ["| 평가 기준 | 배점 |", "|---|---:|", ...RUBRIC_ROWS.map(([label, maximum]) => `| ${label} | ${maximum} |`), "| **합계** | **100** |"].join("\n");
 }
 
-function renderResearchBundle(research: ResearchBundleInput): string {
+// 감사용 전체 표는 과정 문서에만 넣는다. 매일 읽는 학습 문서에는 링크만 남긴다.
+function renderResearchBundle(research: ResearchBundleInput, detailed = true): string {
   const sourcesById = new Map(research.sources.map((source) => [source.id, source]));
-  const lines = [
-    "#### 리서치 질문", "", ...research.questions.map((question) => `- ${escapeInline(question)}`), "",
-    "#### 주제별 선정 조건", "", ...research.topicCriteria.map((criterion) => `- ${escapeInline(criterion)}`), "",
+  const scoreTable = [
     "#### 고정 평가 루브릭", "", renderRubric(), "", "#### 리서치 본문", "", research.narrativeMarkdown.trim(), "",
     "#### 후보 자료", "", "| 순위 | 선정 | 제목 | URL | 발행처 | 독립성 키 | 권위 | 교차 검증 | 관련성 | 교육 품질 | 최신성 | 접근성 | 합계 | 선정 이유 | 한계 |",
     "|---:|:---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|",
@@ -53,7 +52,19 @@ function renderResearchBundle(research: ResearchBundleInput): string {
       source.rank, source.selected ? "예" : "아니요", source.title, source.url, source.publisher, source.independenceKey,
       source.scores.authority, source.scores.crossValidation, source.scores.relevance, source.scores.teachingQuality,
       source.scores.currency, source.scores.accessibility, rubricTotalForMarkdown(source.scores), source.selectionReason, source.limitation,
-    ].map(tableCell).join(" | ")).map((row) => `| ${row} |`), "", "#### 검증된 주장",
+    ].map(tableCell).join(" | ")).map((row) => `| ${row} |`), "",
+  ];
+  const linkList = [
+    "#### 리서치 본문", "", research.narrativeMarkdown.trim(), "",
+    "#### 사용한 자료", "",
+    ...research.sources.filter(({ selected }) => selected).slice().sort((left, right) => left.rank - right.rank)
+      .map((source) => `- [${escapeInline(source.title)}](${source.url}) — ${escapeInline(source.publisher)}`),
+    "",
+  ];
+  const lines = [
+    "#### 리서치 질문", "", ...research.questions.map((question) => `- ${escapeInline(question)}`), "",
+    "#### 주제별 선정 조건", "", ...research.topicCriteria.map((criterion) => `- ${escapeInline(criterion)}`), "",
+    ...(detailed ? scoreTable : linkList), "#### 검증된 주장",
   ];
   for (const [index, claim] of research.claims.entries()) {
     const evidence = claim.evidence.map(({ sourceId, stance }) => `${sourcesById.get(sourceId)?.title ?? sourceId} (${stance})`).join("; ");
@@ -89,8 +100,14 @@ export function renderProgressMarkdown(snapshot: Omit<LearningSnapshot, "documen
 
 export function renderInitialJournalMarkdown(): string { return "# 학습 기록\n"; }
 
+// 학습자가 매일 여는 문서다. 배울 내용이 먼저 오고 근거 자료가 뒤에 온다.
+export const CURRENT_DAY_REFERENCE_HEADING = "### 참고 자료와 근거";
+
 export function renderCurrentDayMarkdown(day: LearningDay, research?: ResearchBundleInput): string {
-  return [`## Day ${day.dayNumber} — ${headingText(day.objective)}`, "", ...(research ? ["### 심화 리서치", "", renderResearchBundle(research).trimEnd(), ""] : [])].join("\n");
+  return [
+    `## Day ${day.dayNumber} — ${headingText(day.objective)}`, "",
+    ...(research ? [CURRENT_DAY_REFERENCE_HEADING, "", renderResearchBundle(research, false).trimEnd(), ""] : []),
+  ].join("\n");
 }
 
 export function appendCurrentDayCheckpoint(existingCurrentDay: string, lesson: Partial<LessonContentInput>, savedAt: string): string {
@@ -99,8 +116,16 @@ export function appendCurrentDayCheckpoint(existingCurrentDay: string, lesson: P
     const value = lesson[field];
     if (typeof value === "string" && value.trim().length > 0) sections.push(`### ${heading}`, "", value.trim(), "", `> 체크포인트 저장: ${savedAt}`, "");
   }
+  if (sections.length === 0) return existingCurrentDay;
+  const block = sections.join("\n");
+
+  // 근거 자료 구획이 이미 있으면 그 앞에 끼워 넣어 학습 내용이 항상 위에 오게 한다.
+  const referenceIndex = existingCurrentDay.indexOf(CURRENT_DAY_REFERENCE_HEADING);
+  if (referenceIndex !== -1) {
+    return `${existingCurrentDay.slice(0, referenceIndex)}${block}\n${existingCurrentDay.slice(referenceIndex)}`;
+  }
   const separator = existingCurrentDay.endsWith("\n") ? "\n" : "\n\n";
-  return `${existingCurrentDay}${separator}${sections.join("\n")}`;
+  return `${existingCurrentDay}${separator}${block}`;
 }
 
 export function appendJournalDay(existingJournal: string, input: { day: LearningDay; currentDayMarkdown: string; dailyResearch: ResearchRun; quizAttempts: QuizAttempt[]; reflection: ReflectionInput; completedAt: string }): string {

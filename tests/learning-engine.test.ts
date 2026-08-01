@@ -1133,7 +1133,13 @@ test("research trims accepted fields and rejects overlength outer whitespace wit
     assert.equal(dailyRun.claims[0]!.statement, dailyClaim.statement);
     assert.equal(dailyRun.claims[0]!.conclusion, dailyClaim.conclusion);
     assert.equal(dailyRun.claims[0]!.uncertainty, "추가 예제로 확인한다.");
-    assert.match(snapshot.documents.currentDay!, new RegExp(`\\| 1 \\| 예 \\| ${dailySource.title} \\| ${dailySource.url} \\|`));
+    // 매일 읽는 학습 문서는 점수와 루브릭 없이 선정 자료 링크만 싣는다.
+    assert.ok(snapshot.documents.currentDay!.includes(`](${dailySource.url})`));
+    assert.ok(snapshot.documents.currentDay!.includes(dailySource.title));
+    assert.doesNotMatch(snapshot.documents.currentDay!, /고정 평가 루브릭/);
+    assert.doesNotMatch(snapshot.documents.currentDay!, /독립성 키/);
+    // 감사용 전체 점수표는 과정 문서에 그대로 남는다.
+    assert.match(snapshot.documents.course, /고정 평가 루브릭/);
     assert.match(snapshot.documents.currentDay!, new RegExp(dailyNarrative));
   }));
 });
@@ -1220,6 +1226,14 @@ test("saves an interruption without changing Day or stage", () => {
       assert.equal(resumed.course.currentStage, "lecture");
       assert.match(resumed.documents.currentDay!, /Day 1 심화 조사 본문/);
       assert.match(resumed.documents.currentDay!, /ELI5 설명 직전/);
+      // 학습자가 여는 문서이므로 배울 내용이 먼저 오고 근거 자료가 뒤에 온다.
+      const lessonIndex = resumed.documents.currentDay!.indexOf("ELI5 설명 직전");
+      const referenceIndex = resumed.documents.currentDay!.indexOf("### 참고 자료와 근거");
+      assert.notEqual(referenceIndex, -1, "근거 자료 구획이 있어야 한다");
+      assert.ok(
+        lessonIndex < referenceIndex,
+        `강의(${lessonIndex})가 근거 자료(${referenceIndex})보다 앞에 와야 한다`,
+      );
       assert.deepEqual(resumed.understoodConcepts, [{ key: "abstraction", label: "추상화" }]);
       assert.deepEqual(resumed.remediationConcepts, [{ key: "binary", label: "이진 표현" }]);
     } finally {
