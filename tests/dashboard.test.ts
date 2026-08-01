@@ -424,6 +424,9 @@ test("resume picks the most recently updated active course and falls back determ
   const older = summary({ id: "a", updatedAt: "2026-07-01T00:00:00.000Z" });
   const newer = summary({ id: "b", updatedAt: "2026-07-09T00:00:00.000Z" });
   assert.equal(resumeCourse([older, newer])!.id, "b");
+  const sameTimeFirst = summary({ id: "a", updatedAt: "2026-07-09T00:00:00.000Z" });
+  const sameTimeSecond = summary({ id: "b", updatedAt: "2026-07-09T00:00:00.000Z" });
+  assert.equal(resumeCourse([sameTimeSecond, sameTimeFirst])!.id, "a");
 
   const drafts = [
     summary({ id: "c", status: "draft", currentStage: null, currentDayNumber: null, updatedAt: "2026-07-02T00:00:00.000Z" }),
@@ -479,6 +482,12 @@ test("attention ties break on updatedAt descending", () => {
     summary({ id: "oldest", currentStage: "lecture", updatedAt: "2026-06-01T00:00:00.000Z" }),
   ]);
   assert.deepEqual(items.map(({ courseId }) => courseId), ["new", "mid", "old"]);
+
+  const sameTimeItems = attentionItems([
+    summary({ id: "z", currentStage: "lecture", updatedAt: "2026-07-11T00:00:00.000Z" }),
+    summary({ id: "a", currentStage: "lecture", updatedAt: "2026-07-11T00:00:00.000Z" }),
+  ]);
+  assert.deepEqual(sameTimeItems.map(({ courseId }) => courseId), ["a", "z"]);
 });
 
 test("tab and filter values are normalized deterministically", () => {
