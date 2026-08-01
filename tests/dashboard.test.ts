@@ -683,6 +683,41 @@ test("parser preserves escaped pipes from generated learning documents", () => {
   assert.equal(text.includes("목표 | 1"), true);
 });
 
+test("parser round-trips writer-escaped course metadata as literal text", () => {
+  const title = "제목 *문자* \\ 경로 | 값";
+  const goal = "목표 *문자* \\ 경로 | 값";
+  const objective = "Day *문자* \\ 경로 | 값";
+  const tableCell = "표 \\ 경로 | 값";
+  const data = research("이스케이프", ["https://escape.example.edu/a", "https://escape.example.org/b"]);
+  const generated = renderApprovedCourseMarkdown(
+    { title, goal } as never,
+    {
+      courseId: "11111111-1111-4111-8111-111111111111",
+      expectedRevision: 0,
+      priorKnowledge: tableCell,
+      learningPreference: "examples",
+      knowledgeMapMarkdown: "기초 → 적용",
+      research: {
+        ...data,
+        sources: [{ ...data.sources[0]!, title: tableCell, selectionReason: tableCell }],
+      },
+      days: Array.from({ length: 30 }, () => ({ objective })),
+    },
+  );
+  const blocks = parseMarkdown(generated);
+  const heading = blocks.find((block) => block.type === "heading" && block.level === 1);
+  const goalBlock = blocks.find((block) => block.type === "paragraph" && block.inline.length === 1 && block.inline[0]?.type === "text" && block.inline[0].value === goal);
+  const objectives = blocks.find((block): block is Extract<MarkdownBlock, { type: "list" }> => block.type === "list" && block.ordered);
+  const courseInfo = blocks.find((block): block is Extract<MarkdownBlock, { type: "table" }> => block.type === "table" && block.header[0]?.[0]?.type === "text" && block.header[0][0].value === "항목");
+  const sourceTable = blocks.find((block): block is Extract<MarkdownBlock, { type: "table" }> => block.type === "table" && block.header[0]?.[0]?.type === "text" && block.header[0][0].value === "순위");
+
+  assert.deepEqual(heading, { type: "heading", level: 1, inline: [{ type: "text", value: title }] });
+  assert.deepEqual(goalBlock, { type: "paragraph", inline: [{ type: "text", value: goal }] });
+  assert.deepEqual(objectives?.items[0], [{ type: "text", value: objective }]);
+  assert.deepEqual(courseInfo?.rows[0]?.[1], [{ type: "text", value: tableCell }]);
+  assert.deepEqual(sourceTable?.rows[0]?.[2], [{ type: "text", value: tableCell }]);
+});
+
 test("parser keeps every malformed-table cell as literal text", () => {
   const source = [
     "| 이름 | 점수 |",

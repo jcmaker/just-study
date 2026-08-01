@@ -18,6 +18,10 @@ export type MarkdownBlock =
 
 const INLINE_PATTERN = /(!?\[[^\]\n]*\]\([^\s()]*\))|(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)/;
 const LINK_PATTERN = /^\[([^\]\n]*)\]\(([^\s()]*)\)$/;
+const ESCAPABLE_PUNCTUATION = new Set([
+  "!", "\"", "#", "$", "%", "&", "'", "(", ")", "*", "+", ",", "-", ".", "/", ":", ";", "<", "=", ">", "?", "@",
+  "[", "\\", "]", "^", "_", "`", "{", "|", "}", "~",
+]);
 
 function safeLinkHref(candidate: string): string | null {
   if (candidate === "") return null;
@@ -31,11 +35,17 @@ function safeLinkHref(candidate: string): string | null {
 }
 
 function pushText(target: MarkdownInline[], value: string): void {
-  const literal = value.replace(/\\\|/g, "|");
-  if (literal === "") return;
+  if (value === "") return;
   const last = target.at(-1);
-  if (last?.type === "text") last.value += literal;
-  else target.push({ type: "text", value: literal });
+  if (last?.type === "text") last.value += value;
+  else target.push({ type: "text", value });
+}
+
+function escapedPunctuationIndex(source: string): number {
+  for (let index = 0; index + 1 < source.length; index += 1) {
+    if (source[index] === "\\" && ESCAPABLE_PUNCTUATION.has(source[index + 1]!)) return index;
+  }
+  return -1;
 }
 
 export function parseInline(source: string): MarkdownInline[] {
@@ -44,6 +54,13 @@ export function parseInline(source: string): MarkdownInline[] {
 
   while (rest.length > 0) {
     const match = INLINE_PATTERN.exec(rest);
+    const escapedIndex = escapedPunctuationIndex(rest);
+    if (escapedIndex !== -1 && (match === null || escapedIndex < match.index)) {
+      pushText(result, rest.slice(0, escapedIndex));
+      pushText(result, rest[escapedIndex + 1]!);
+      rest = rest.slice(escapedIndex + 2);
+      continue;
+    }
     if (!match) {
       pushText(result, rest);
       break;
@@ -83,7 +100,7 @@ function tableCells(line: string): string[] {
   let escaped = false;
   for (const character of trimmed) {
     if (escaped) {
-      cell += character === "|" ? "|" : `\\${character}`;
+      cell += character === "|" || character === "\\" ? character : `\\${character}`;
       escaped = false;
     } else if (character === "\\") {
       escaped = true;
