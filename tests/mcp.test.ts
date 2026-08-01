@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -247,6 +247,97 @@ test("negotiates Streamable HTTP and lists health", { concurrency: false }, asyn
   }
 });
 
+test("health has no side effects for a first call without a data store", { concurrency: false }, async () => {
+  const parent = mkdtempSync(join(tmpdir(), "just-study-mcp-empty-"));
+  const dataRoot = join(parent, "data");
+  const previousDataRoot = process.env.JUST_STUDY_DATA_DIR;
+  clearTestRuntime();
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+
+  try {
+    await withMcpClient(async (client) => {
+      const health = structured<{ ok: true; data: { ok: boolean; database: string; storage: string } }>(
+        await client.callTool({ name: "health", arguments: {} }),
+      );
+      assert.equal(health.data.ok, false);
+      assert.equal(health.data.database, "error");
+      assert.equal(health.data.storage, "ok");
+    });
+    assert.equal(existsSync(dataRoot), false);
+    assert.deepEqual(readdirSync(parent), []);
+    assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime, undefined);
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.JUST_STUDY_DATA_DIR;
+    else process.env.JUST_STUDY_DATA_DIR = previousDataRoot;
+    clearTestRuntime();
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("other read-only tools do not initialize a missing data store", { concurrency: false }, async () => {
+  for (const [name, arguments_] of [
+    ["list_courses", {}],
+    ["get_learning_state", { courseId: crypto.randomUUID() }],
+    ["read_learning_document", { courseId: crypto.randomUUID(), document: "course" }],
+  ] as const) {
+    const parent = mkdtempSync(join(tmpdir(), "just-study-mcp-empty-read-"));
+    const dataRoot = join(parent, "data");
+    const previousDataRoot = process.env.JUST_STUDY_DATA_DIR;
+    clearTestRuntime();
+    process.env.JUST_STUDY_DATA_DIR = dataRoot;
+
+    try {
+      await withMcpClient(async (client) => {
+        const result = await client.callTool({ name, arguments: arguments_ });
+        assert.equal(result.isError, true, name);
+        assert.equal((result.structuredContent as { error: { code: string } }).error.code, "UNAVAILABLE", name);
+      });
+      assert.equal(existsSync(dataRoot), false, name);
+    } finally {
+      if (previousDataRoot === undefined) delete process.env.JUST_STUDY_DATA_DIR;
+      else process.env.JUST_STUDY_DATA_DIR = previousDataRoot;
+      clearTestRuntime();
+      rmSync(parent, { recursive: true, force: true });
+    }
+  }
+});
+
+test("health inspects an existing store without weakening its recovery inventory", { concurrency: false }, async () => {
+  const dataRoot = makeDataRoot();
+  const previousDataRoot = process.env.JUST_STUDY_DATA_DIR;
+  const db = openDatabase(dataRoot);
+  const course = createCourse(db, dataRoot, {
+    requestId: crypto.randomUUID(),
+    title: "점검 과정",
+    goal: "복구 점검 결과를 확인한다.",
+  }).course;
+  db.close();
+  clearTestRuntime();
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+  writeFileSync(join(dataRoot, course.markdownPath), "# 변경됨\n", "utf8");
+  mkdirSync(join(dataRoot, "tmp", "unfinished-recovery"));
+
+  try {
+    await withMcpClient(async (client) => {
+      const health = structured<{
+        ok: true;
+        data: { ok: boolean; database: string; storage: string; corruptCourseIds: string[]; temporaryEntries: string[] };
+      }>(await client.callTool({ name: "health", arguments: {} }));
+      assert.equal(health.data.ok, false);
+      assert.equal(health.data.database, "ok");
+      assert.equal(health.data.storage, "ok");
+      assert.deepEqual(health.data.corruptCourseIds, [course.id]);
+      assert.deepEqual(health.data.temporaryEntries, ["unfinished-recovery"]);
+    });
+    assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime, undefined);
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.JUST_STUDY_DATA_DIR;
+    else process.env.JUST_STUDY_DATA_DIR = previousDataRoot;
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 function structured<T>(result: Awaited<ReturnType<Client["callTool"]>>): T {
   assert.equal(result.isError, undefined);
   assert.ok(result.structuredContent);
@@ -300,6 +391,28 @@ test("lists, creates, resumes, and reads courses through MCP", { concurrency: fa
       const rejected = await client.callTool({ name: "read_learning_document", arguments: { courseId: created.data.course.id, document: "../../secret" } });
       assert.equal(rejected.isError, true);
       assert.equal(JSON.stringify(rejected).includes("../../secret"), false);
+    });
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("lists an active course with its user-meaningful current Day number", { concurrency: false }, async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+  try {
+    await withMcpClient(async (client) => {
+      const { courseId } = await createLectureReadyCourse(client);
+      const listed = structured<{ ok: true; data: { courses: { id: string; currentDayId: string | null; currentDayNumber: number | null }[] } }>(
+        await client.callTool({ name: "list_courses", arguments: {} }),
+      );
+      assert.equal(listed.data.courses.length, 1);
+      assert.equal(listed.data.courses[0]!.id, courseId);
+      assert.notEqual(listed.data.courses[0]!.currentDayId, null);
+      assert.equal(listed.data.courses[0]!.currentDayNumber, 1);
     });
   } finally {
     db.close();

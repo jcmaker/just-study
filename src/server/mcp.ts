@@ -31,6 +31,7 @@ import {
 import type { DatabaseHandle } from "./database.ts";
 import {
   DatabaseUnavailableError,
+  getReadOnlyRuntime,
   getRuntime,
   requireDatabase,
 } from "./runtime.ts";
@@ -128,6 +129,7 @@ export function compactCourse(course: Course) {
     goal: course.goal,
     status: course.status,
     currentDayId: course.currentDayId,
+    currentDayNumber: null as number | null,
     currentStage: course.currentStage,
     revision: course.revision,
     outlineApprovedAt: course.outlineApprovedAt,
@@ -138,7 +140,7 @@ export function compactCourse(course: Course) {
 
 export function compactLearningState(snapshot: LearningSnapshot) {
   return {
-    course: compactCourse(snapshot.course),
+    course: { ...compactCourse(snapshot.course), currentDayNumber: snapshot.currentDay?.dayNumber ?? null },
     days: snapshot.days,
     currentDay: snapshot.currentDay,
     researchRuns: snapshot.researchRuns,
@@ -162,6 +164,7 @@ const compactCourseSchema = z.object({
   goal: z.string(),
   status: z.enum(["draft", "active", "completed"]),
   currentDayId: uuidSchema.nullable(),
+  currentDayNumber: z.number().int().min(1).max(30).nullable(),
   currentStage: z.enum(["lecture", "quiz", "remediation", "reflection"]).nullable(),
   revision: revisionSchema,
   outlineApprovedAt: z.string().nullable(),
@@ -361,12 +364,14 @@ export function createJustStudyMcpServer(): McpServer {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async (input) => withSafeInput(input, () => {
+      const runtime = getReadOnlyRuntime();
       try {
-        const runtime = getRuntime();
         const report = getHealth(runtime.db, runtime.dataRoot);
         return success(report.message, report);
       } catch (error) {
         return failure(error);
+      } finally {
+        runtime.close();
       }
     }),
   );
@@ -383,8 +388,21 @@ export function createJustStudyMcpServer(): McpServer {
     async (input) => withSafeInput(input, () => runTool(
         ({ courses }) => `${courses.length}개의 과정을 찾았습니다.`,
         () => {
-          const runtime = getRuntime();
-          return { courses: listCourses(requireDatabase(runtime)).map(compactCourse) };
+          const runtime = getReadOnlyRuntime();
+          try {
+            const db = requireDatabase(runtime);
+            return {
+              courses: listCourses(db).map((course) => {
+                const day = course.currentDayId === null
+                  ? null
+                  : db.prepare("SELECT day_number FROM course_days WHERE id = ? AND course_id = ?")
+                    .get(course.currentDayId, course.id) as { day_number: number } | undefined;
+                return { ...compactCourse(course), currentDayNumber: day?.day_number ?? null };
+              }),
+            };
+          } finally {
+            runtime.close();
+          }
         },
       )),
   );
@@ -401,10 +419,14 @@ export function createJustStudyMcpServer(): McpServer {
     async (input) => withSafeInput(input, ({ courseId }) => runTool(
         ({ state }) => `${state.course.title}의 ${state.course.currentStage ?? "완료"} 단계입니다.`,
         () => {
-          const runtime = getRuntime();
-          const snapshot = getLearningSnapshot(requireDatabase(runtime), runtime.dataRoot, courseId);
-          if (!snapshot) throw new LearningStateError("Course does not exist");
-          return { state: compactLearningState(snapshot) };
+          const runtime = getReadOnlyRuntime();
+          try {
+            const snapshot = getLearningSnapshot(requireDatabase(runtime), runtime.dataRoot, courseId);
+            if (!snapshot) throw new LearningStateError("Course does not exist");
+            return { state: compactLearningState(snapshot) };
+          } finally {
+            runtime.close();
+          }
         },
       )),
   );
@@ -421,10 +443,14 @@ export function createJustStudyMcpServer(): McpServer {
     async (input) => withSafeInput(input, ({ courseId, document }) => runTool(
         () => `${document} 문서를 읽었습니다.`,
         () => {
-          const runtime = getRuntime();
-          const found = getLearningDocument(requireDatabase(runtime), runtime.dataRoot, courseId, document);
-          if (!found) throw new LearningStateError("Learning document is not available");
-          return { course: compactCourse(found.course), document: found.document, markdown: found.markdown };
+          const runtime = getReadOnlyRuntime();
+          try {
+            const found = getLearningDocument(requireDatabase(runtime), runtime.dataRoot, courseId, document);
+            if (!found) throw new LearningStateError("Learning document is not available");
+            return { course: compactCourse(found.course), document: found.document, markdown: found.markdown };
+          } finally {
+            runtime.close();
+          }
         },
       )),
   );

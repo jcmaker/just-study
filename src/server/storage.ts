@@ -1,4 +1,6 @@
 import {
+  accessSync,
+  constants,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -10,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { relative, resolve, sep } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 
 export type CourseDraft = {
   tempDirectory: string;
@@ -488,25 +490,20 @@ export function listTemporaryEntries(dataRoot: string): string[] {
 }
 
 export function probeStorageWritable(dataRoot: string): void {
-  let probePath: string | undefined;
-
   try {
-    const { root, temporaryRoot } = storagePaths(dataRoot);
-    probePath = resolveInsideDataRoot(root, `tmp/.health-${randomUUID()}`);
-    assertNoSymlinks(root, temporaryRoot);
-    assertNoSymlinks(root, probePath);
-    writeFileSync(probePath, "ok", { encoding: "utf8", flag: "wx" });
+    const root = resolve(dataRoot);
+    const temporaryRoot = resolveInsideDataRoot(root, "tmp");
+    assertNoSymlinks(root, root);
+    const rootStat = lstatIfExists(root);
+    if (rootStat && !rootStat.isDirectory()) storageError("Storage root is not a directory");
+
+    if (rootStat) {
+      assertNoSymlinks(root, temporaryRoot);
+      accessSync(root, constants.R_OK | constants.W_OK | constants.X_OK);
+    } else {
+      accessSync(dirname(root), constants.W_OK | constants.X_OK);
+    }
   } catch (error) {
     rethrowStorageError(error, "Storage write probe failed");
-  } finally {
-    if (probePath && existsSync(probePath)) {
-      try {
-        const root = resolve(dataRoot);
-        assertNoSymlinks(root, probePath);
-        unlinkSync(probePath);
-      } catch (error) {
-        rethrowStorageError(error, "Storage write probe failed");
-      }
-    }
   }
 }

@@ -1,5 +1,5 @@
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 import Database from "better-sqlite3";
 
@@ -255,4 +255,10 @@ export function openDatabase(dataRoot: string): DatabaseHandle {
     db.close();
     throw error;
   }
+}
+
+export function openDatabaseReadOnly(dataRoot: string): DatabaseHandle {
+  const databasePath = join(resolve(dataRoot), "just-study.sqlite");
+  if (!existsSync(databasePath)) throw new Error("Database does not exist");
+  return new Database(databasePath, { readonly: true, fileMustExist: true });
 }

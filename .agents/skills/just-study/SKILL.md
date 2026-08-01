@@ -28,7 +28,7 @@ Call `list_courses` after health.
 1. Ask for existing knowledge, the concrete Day 30 outcome, and learning preference one question at a time. Reuse answers already supplied by the user.
 2. Generate one UUID request ID and reuse it if `create_course` must be called again. Store the draft with the topic as title and the Day 30 outcome as goal.
 3. Before searching, write the research questions, the fixed 100-point rubric, and topic-specific selection criteria.
-4. Browse actual primary, official, university, standards, and strong educational sources. Open every selected URL. Open every URL before submitting it through `approve_outline` or `record_daily_research`; the matching `openPage` event must exist in the current persisted Codex thread.
+4. Browse actual primary, official, university, standards, and strong educational sources. Open every URL before submitting it through `approve_outline` or `record_daily_research` when it was newly researched; the matching `openPage` event must exist in the current persisted Codex thread. Approved saved URLs follow the explicit reuse flow below instead.
 5. Score authority 0–25, cross-validation 0–25, relevance 0–20, teaching quality 0–15, currency 0–10, and accessibility 0–5. Rank every candidate. Explain selection and limitations.
 6. Support every major claim with at least two selected sources scoring at least 80 and having different independence keys. Record opposition and uncertainty.
 7. Build exactly 30 ordered Days. Give each Day one observable objective.
@@ -63,7 +63,7 @@ Ask what was learned, what remains confusing, and how the learner feels. After a
 
 ## When web is unavailable
 
-Do not claim new research and do not create URLs. If approved saved sources are relevant, ask whether to reuse them with their known limitations. Only after explicit reuse approval may you submit a Day research bundle containing those saved URLs. If no relevant approved source exists, stop until web access is available.
+Do not claim new research and do not create URLs. If approved saved sources are relevant, ask whether to reuse them with their known limitations. Only after explicit reuse approval may you submit a Day research bundle containing those approved saved URLs; this reuse does not require a new `openPage` event. If no relevant approved source exists, stop until web access is available.
 
 ## Responses
 

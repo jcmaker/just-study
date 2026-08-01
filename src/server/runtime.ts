@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 
 import type { DatabaseHandle } from "./database.ts";
-import { openDatabase } from "./database.ts";
+import { openDatabase, openDatabaseReadOnly } from "./database.ts";
 
 export type Runtime = {
   dataRoot: string;
@@ -31,6 +31,29 @@ export function getRuntime(): Runtime {
   }
 
   return runtimeGlobal.__justStudyRuntime;
+}
+
+export function getReadOnlyRuntime(): Runtime & { close(): void } {
+  if (runtimeGlobal.__justStudyRuntime) {
+    return { ...runtimeGlobal.__justStudyRuntime, close() {} };
+  }
+
+  const dataRoot = resolve(
+    process.env.JUST_STUDY_DATA_DIR ?? resolve(process.cwd(), "data"),
+  );
+  let db: DatabaseHandle | null = null;
+
+  try {
+    db = openDatabaseReadOnly(dataRoot);
+  } catch {
+    // A missing or unreadable database is reported by the non-mutating health check.
+  }
+
+  return {
+    dataRoot,
+    db,
+    close() { db?.close(); },
+  };
 }
 
 export function requireDatabase(runtime: Runtime): DatabaseHandle {

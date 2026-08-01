@@ -54,6 +54,14 @@ test("pins the mutually exclusive checkpoint shapes and the health ok:false rule
     assert.match(skill, new RegExp(phrase));
 });
 
+test("distinguishes new URL provenance from approved saved-source reuse", () => {
+  assert.match(skill, /when it was newly researched/);
+  assert.match(skill, /current persisted Codex thread/);
+  assert.match(skill, /approved saved URLs/);
+  assert.match(skill, /explicit reuse approval/);
+  assert.match(skill, /does not require a new `openPage` event/);
+});
+
 test("keeps project MCP config aligned with the skill dependency", () => {
   assert.match(config, /\[mcp_servers\.just-study\]/);
   assert.match(config, /url = "http:\/\/127\.0\.0\.1:3000\/mcp"/);
