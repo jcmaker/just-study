@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { createCourse } from "../src/server/courses.ts";
 import { getDashboardOverview } from "../src/server/dashboard.ts";
+import { parseMarkdown, type MarkdownBlock } from "../src/server/markdown.ts";
 import {
   attentionItems,
   courseAccentIndex,
@@ -30,6 +31,7 @@ import {
   saveLearningCheckpoint,
   startQuiz,
 } from "../src/server/learning.ts";
+import { renderApprovedCourseMarkdown } from "../src/server/learning-markdown.ts";
 
 function makeDataRoot(): string {
   return mkdtempSync(join(tmpdir(), "just-study-dashboard-"));
@@ -523,4 +525,173 @@ test("course accent is a stable identity-only palette index", () => {
   assert.equal(Number.isInteger(courseAccentIndex(id)), true);
   assert.equal(courseAccentIndex(id) >= 0 && courseAccentIndex(id) < 6, true);
   assert.equal(courseAccentIndex(""), 0);
+});
+
+test("parser keeps raw HTML as literal text", () => {
+  const blocks = parseMarkdown("<script>alert(1)</script>\n\n<img src=x onerror=y>");
+  assert.deepEqual(blocks, [
+    { type: "paragraph", inline: [{ type: "text", value: "<script>alert(1)</script>" }] },
+    { type: "paragraph", inline: [{ type: "text", value: "<img src=x onerror=y>" }] },
+  ]);
+});
+
+test("parser links only http and https URLs and keeps others as text", () => {
+  const source = "[안전](https://example.edu/a) [평문](javascript:alert(1)) [상대](/local) [빈](  )";
+  const blocks = parseMarkdown(source);
+
+  assert.deepEqual(blocks, [{
+    type: "paragraph",
+    inline: [
+      { type: "link", href: "https://example.edu/a", text: "안전" },
+      { type: "text", value: " [평문](javascript:alert(1)) [상대](/local) [빈](  )" },
+    ],
+  }]);
+
+  const inline = blocks[0]!.type === "paragraph" ? blocks[0]!.inline : [];
+  assert.equal(inline.filter(({ type }) => type === "link").length, 1);
+  for (const node of inline) {
+    if (node.type === "link") assert.match(node.href, /^https?:\/\//);
+  }
+  assert.equal(inline.some((node) => node.type === "link" && node.href.includes("javascript:")), false);
+  assert.equal(inline.some((node) => node.type === "text" && node.value.includes("javascript:")), true);
+});
+
+test("parser never emits a link for a non-http scheme in any position", () => {
+  for (const unsafe of [
+    "[a](javascript:alert)",
+    "[b](data:text/html,x)",
+    "[c](vbscript:x)",
+    "[d](file:///etc/passwd)",
+    "[e](//evil.test/x)",
+    "[f](/local)",
+  ]) {
+    const blocks = parseMarkdown(unsafe);
+    const inline = blocks[0]!.type === "paragraph" ? blocks[0]!.inline : [];
+    assert.equal(inline.some(({ type }) => type === "link"), false, unsafe);
+    assert.equal(inline.map((node) => (node.type === "text" ? node.value : "")).join(""), unsafe, unsafe);
+  }
+  const safe = parseMarkdown("[g](HTTPS://Example.EDU/a)");
+  const inline = safe[0]!.type === "paragraph" ? safe[0]!.inline : [];
+  assert.deepEqual(inline, [{ type: "link", href: "https://example.edu/a", text: "g" }]);
+});
+
+test("parser reads headings, lists, quotes, code, rules, and tables", () => {
+  const source = [
+    "# 제목",
+    "",
+    "### 소제목",
+    "",
+    "- 첫째",
+    "- 둘째",
+    "",
+    "1. 하나",
+    "2. 둘",
+    "",
+    "> 인용",
+    "> 계속",
+    "",
+    "```ts",
+    "const a = 1;",
+    "```",
+    "",
+    "---",
+    "",
+    "| 이름 | 점수 |",
+    "| --- | ---: |",
+    "| 자료 | 94 |",
+  ].join("\n");
+
+  assert.deepEqual(parseMarkdown(source), [
+    { type: "heading", level: 1, inline: [{ type: "text", value: "제목" }] },
+    { type: "heading", level: 3, inline: [{ type: "text", value: "소제목" }] },
+    { type: "list", ordered: false, items: [
+      [{ type: "text", value: "첫째" }],
+      [{ type: "text", value: "둘째" }],
+    ] },
+    { type: "list", ordered: true, items: [
+      [{ type: "text", value: "하나" }],
+      [{ type: "text", value: "둘" }],
+    ] },
+    { type: "quote", lines: [
+      [{ type: "text", value: "인용" }],
+      [{ type: "text", value: "계속" }],
+    ] },
+    { type: "code", language: "ts", value: "const a = 1;" },
+    { type: "rule" },
+    { type: "table", header: [
+      [{ type: "text", value: "이름" }],
+      [{ type: "text", value: "점수" }],
+    ], alignments: ["left", "right"], rows: [[
+      [{ type: "text", value: "자료" }],
+      [{ type: "text", value: "94" }],
+    ]] },
+  ] satisfies MarkdownBlock[]);
+});
+
+test("parser reads emphasis and inline code without nesting HTML", () => {
+  assert.deepEqual(parseMarkdown("**굵게** *기울임* `코드` 그리고 <b>평문</b>"), [{
+    type: "paragraph",
+    inline: [
+      { type: "strong", value: "굵게" },
+      { type: "text", value: " " },
+      { type: "emphasis", value: "기울임" },
+      { type: "text", value: " " },
+      { type: "code", value: "코드" },
+      { type: "text", value: " 그리고 <b>평문</b>" },
+    ],
+  }]);
+});
+
+test("parser never loses content on unterminated syntax", () => {
+  assert.deepEqual(parseMarkdown("**열림"), [{ type: "paragraph", inline: [{ type: "text", value: "**열림" }] }]);
+  assert.deepEqual(parseMarkdown("```ts\nconst a = 1;"), [{ type: "code", language: "ts", value: "const a = 1;" }]);
+  assert.deepEqual(parseMarkdown("   "), []);
+  assert.deepEqual(parseMarkdown(""), []);
+});
+
+test("parser treats a fenced block as literal even when it contains Markdown", () => {
+  assert.deepEqual(parseMarkdown("```\n# 제목\n- 목록\n```"), [
+    { type: "code", language: null, value: "# 제목\n- 목록" },
+  ]);
+});
+
+test("parser preserves escaped pipes from generated learning documents", () => {
+  const generated = renderApprovedCourseMarkdown(
+    { title: "파이프", goal: "파이프를 안전하게 읽는다." } as never,
+    {
+      courseId: "11111111-1111-4111-8111-111111111111",
+      expectedRevision: 0,
+      priorKnowledge: "기초 | 표",
+      learningPreference: "examples",
+      knowledgeMapMarkdown: "기초 → 적용",
+      research: {
+        ...research("파이프", ["https://pipes.example.edu/a", "https://pipes.example.org/b"]),
+        sources: [{
+          ...research("파이프", ["https://pipes.example.edu/a", "https://pipes.example.org/b"]).sources[0]!,
+          title: "제목 | 파이프",
+          selectionReason: "이유 | 추가",
+        }],
+      },
+      days: Array.from({ length: 30 }, (_, index) => ({ objective: `목표 | ${index + 1}` })),
+    },
+  );
+
+  assert.equal(generated.includes("제목 \\| 파이프"), true);
+  const text = JSON.stringify(parseMarkdown(generated));
+  assert.equal(text.includes("제목 | 파이프"), true);
+  assert.equal(text.includes("이유 | 추가"), true);
+  assert.equal(text.includes("목표 | 1"), true);
+});
+
+test("parser keeps every malformed-table cell as literal text", () => {
+  const source = [
+    "| 이름 | 점수 |",
+    "| --- | --- |",
+    "| 자료 | 94 | 보존 |",
+  ].join("\n");
+
+  assert.deepEqual(parseMarkdown(source), [{
+    type: "paragraph",
+    inline: [{ type: "text", value: "| 이름 | 점수 | | --- | --- | | 자료 | 94 | 보존 |" }],
+  }]);
 });
