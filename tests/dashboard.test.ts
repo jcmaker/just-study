@@ -6,6 +6,20 @@ import test from "node:test";
 
 import { createCourse } from "../src/server/courses.ts";
 import { getDashboardOverview } from "../src/server/dashboard.ts";
+import {
+  attentionItems,
+  courseAccentIndex,
+  courseCardModel,
+  courseProgress,
+  filterCourses,
+  normalizeCourseFilter,
+  normalizeTab,
+  resumeCourse,
+  RESUME_COMMAND,
+  STAGE_LABELS,
+  STATUS_LABELS,
+} from "../src/server/dashboard-view.ts";
+import type { DashboardCourseSummary } from "../src/server/dashboard.ts";
 import { openDatabase, type DatabaseHandle } from "../src/server/database.ts";
 import {
   approveOutline,
@@ -330,4 +344,174 @@ test("course history keeps returning history after a course completes", () => {
       Array.from({ length: 30 }, (_, index) => index + 1),
     );
   });
+});
+
+function summary(overrides: Partial<DashboardCourseSummary> = {}): DashboardCourseSummary {
+  return {
+    id: "11111111-1111-4111-8111-111111111111",
+    title: "과정",
+    goal: "목표",
+    status: "active",
+    currentDayNumber: 3,
+    currentDayObjective: "Day 3 목표",
+    currentStage: "lecture",
+    approvedDayCount: 30,
+    completedDayCount: 2,
+    hasQuizResponse: false,
+    revision: 7,
+    outlineApprovedAt: "2026-07-01T00:00:00.000Z",
+    completedAt: null,
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-10T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+test("view model labels every stored enum in Korean", () => {
+  assert.deepEqual(Object.keys(STAGE_LABELS).sort(), ["lecture", "quiz", "reflection", "remediation"]);
+  assert.equal(STAGE_LABELS.lecture, "강의");
+  assert.equal(STAGE_LABELS.quiz, "퀴즈");
+  assert.equal(STAGE_LABELS.remediation, "보완 학습");
+  assert.equal(STAGE_LABELS.reflection, "회고");
+  assert.equal(STATUS_LABELS.draft, "초안");
+  assert.equal(STATUS_LABELS.active, "진행 중");
+  assert.equal(STATUS_LABELS.completed, "완료");
+  assert.equal(RESUME_COMMAND, "$just-study 계속");
+});
+
+test("course card model never invents Day, stage, or progress for a draft", () => {
+  const draft = courseCardModel(summary({
+    status: "draft",
+    currentDayNumber: null,
+    currentDayObjective: null,
+    currentStage: null,
+    approvedDayCount: 0,
+    completedDayCount: 0,
+  }));
+  assert.equal(draft.statusLabel, "초안");
+  assert.equal(draft.dayLabel, null);
+  assert.equal(draft.stageLabel, null);
+  assert.equal(draft.progress, null);
+  assert.equal(draft.note, "30일 계획 승인 대기");
+
+  const active = courseCardModel(summary());
+  assert.equal(active.dayLabel, "Day 3 / 30");
+  assert.equal(active.stageLabel, "강의");
+  assert.deepEqual(active.progress, { completed: 2, approved: 30, percent: 7 });
+  assert.equal(active.note, null);
+
+  const completed = courseCardModel(summary({
+    status: "completed",
+    currentDayNumber: null,
+    currentDayObjective: null,
+    currentStage: null,
+    completedDayCount: 30,
+    completedAt: "2026-07-20T00:00:00.000Z",
+  }));
+  assert.equal(completed.dayLabel, "Day 30 / 30");
+  assert.equal(completed.stageLabel, null);
+  assert.deepEqual(completed.progress, { completed: 30, approved: 30, percent: 100 });
+  assert.equal(completed.note, "완료");
+});
+
+test("progress is completed Days over approved Days and is never fabricated", () => {
+  assert.equal(courseProgress(summary({ approvedDayCount: 0, completedDayCount: 0 })), null);
+  assert.deepEqual(courseProgress(summary({ approvedDayCount: 30, completedDayCount: 0 })), { completed: 0, approved: 30, percent: 0 });
+  assert.deepEqual(courseProgress(summary({ approvedDayCount: 30, completedDayCount: 29 })), { completed: 29, approved: 30, percent: 97 });
+});
+
+test("resume picks the most recently updated active course and falls back deterministically", () => {
+  const older = summary({ id: "a", updatedAt: "2026-07-01T00:00:00.000Z" });
+  const newer = summary({ id: "b", updatedAt: "2026-07-09T00:00:00.000Z" });
+  assert.equal(resumeCourse([older, newer])!.id, "b");
+
+  const drafts = [
+    summary({ id: "c", status: "draft", currentStage: null, currentDayNumber: null, updatedAt: "2026-07-02T00:00:00.000Z" }),
+    summary({ id: "d", status: "draft", currentStage: null, currentDayNumber: null, updatedAt: "2026-07-08T00:00:00.000Z" }),
+  ];
+  assert.equal(resumeCourse(drafts)!.id, "d");
+
+  const done = summary({ id: "e", status: "completed", currentStage: null, currentDayNumber: null });
+  assert.equal(resumeCourse([done]), null);
+  assert.equal(resumeCourse([]), null);
+});
+
+test("attention uses the fixed priority, one item per course, at most three", () => {
+  const items = attentionItems([
+    summary({ id: "lecture", currentStage: "lecture", updatedAt: "2026-07-09T00:00:00.000Z" }),
+    summary({ id: "draft", status: "draft", currentStage: null, currentDayNumber: null, approvedDayCount: 0, updatedAt: "2026-07-08T00:00:00.000Z" }),
+    summary({ id: "quiz-open", currentStage: "quiz", hasQuizResponse: false, updatedAt: "2026-07-07T00:00:00.000Z" }),
+    summary({ id: "quiz-started", currentStage: "quiz", hasQuizResponse: true, updatedAt: "2026-07-06T00:00:00.000Z" }),
+    summary({ id: "reflection", currentStage: "reflection", updatedAt: "2026-07-05T00:00:00.000Z" }),
+    summary({ id: "remediation", currentStage: "remediation", updatedAt: "2026-07-04T00:00:00.000Z" }),
+    summary({ id: "completed", status: "completed", currentStage: null, currentDayNumber: null }),
+  ]);
+
+  assert.deepEqual(items.map(({ courseId }) => courseId), ["remediation", "reflection", "quiz-started"]);
+  assert.equal(items[0]!.message, "보완 학습이 필요합니다");
+  assert.equal(items[0]!.tab, "today");
+  assert.equal(items[1]!.message, "회고를 완료하면 다음 Day로 이동합니다");
+  assert.equal(items[1]!.tab, "today");
+  assert.equal(items[2]!.message, "퀴즈 답변을 이어가세요");
+  assert.equal(items[2]!.tab, "quiz");
+  assert.equal(items[2]!.href, "/courses/quiz-started?tab=quiz");
+
+  assert.deepEqual(attentionItems([summary({ status: "completed", currentStage: null })]), []);
+
+  const openQuiz = attentionItems([summary({ id: "only", currentStage: "quiz", hasQuizResponse: false })]);
+  assert.equal(openQuiz[0]!.message, "오늘의 퀴즈가 기다리고 있습니다");
+  assert.equal(openQuiz[0]!.tab, "today");
+
+  const onlyDraft = attentionItems([summary({ status: "draft", currentStage: null, currentDayNumber: null })]);
+  assert.equal(onlyDraft[0]!.message, "30일 계획 승인이 필요합니다");
+  assert.equal(onlyDraft[0]!.tab, "overview");
+
+  const onlyLecture = attentionItems([summary({ currentStage: "lecture" })]);
+  assert.equal(onlyLecture[0]!.message, "오늘 학습을 이어가세요");
+  assert.equal(onlyLecture[0]!.tab, "today");
+});
+
+test("attention ties break on updatedAt descending", () => {
+  const items = attentionItems([
+    summary({ id: "old", currentStage: "lecture", updatedAt: "2026-07-01T00:00:00.000Z" }),
+    summary({ id: "new", currentStage: "lecture", updatedAt: "2026-07-11T00:00:00.000Z" }),
+    summary({ id: "mid", currentStage: "lecture", updatedAt: "2026-07-05T00:00:00.000Z" }),
+    summary({ id: "oldest", currentStage: "lecture", updatedAt: "2026-06-01T00:00:00.000Z" }),
+  ]);
+  assert.deepEqual(items.map(({ courseId }) => courseId), ["new", "mid", "old"]);
+});
+
+test("tab and filter values are normalized deterministically", () => {
+  for (const tab of ["overview", "plan", "today", "sources", "quiz", "journal"]) {
+    assert.equal(normalizeTab(tab), tab);
+  }
+  for (const value of [undefined, null, "", "Overview", "unknown", "../secret", ["today"]]) {
+    assert.equal(normalizeTab(value as never), "overview");
+  }
+  for (const filter of ["all", "active", "draft", "completed"]) {
+    assert.equal(normalizeCourseFilter(filter), filter);
+  }
+  for (const value of [undefined, null, "", "ACTIVE", "archived", ["all"]]) {
+    assert.equal(normalizeCourseFilter(value as never), "all");
+  }
+});
+
+test("filter selects by stored status only", () => {
+  const courses = [
+    summary({ id: "a", status: "draft" }),
+    summary({ id: "b", status: "active" }),
+    summary({ id: "c", status: "completed" }),
+  ];
+  assert.deepEqual(filterCourses(courses, "all").map(({ id }) => id), ["a", "b", "c"]);
+  assert.deepEqual(filterCourses(courses, "draft").map(({ id }) => id), ["a"]);
+  assert.deepEqual(filterCourses(courses, "active").map(({ id }) => id), ["b"]);
+  assert.deepEqual(filterCourses(courses, "completed").map(({ id }) => id), ["c"]);
+});
+
+test("course accent is a stable identity-only palette index", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  assert.equal(courseAccentIndex(id), courseAccentIndex(id));
+  assert.equal(Number.isInteger(courseAccentIndex(id)), true);
+  assert.equal(courseAccentIndex(id) >= 0 && courseAccentIndex(id) < 6, true);
+  assert.equal(courseAccentIndex(""), 0);
 });
