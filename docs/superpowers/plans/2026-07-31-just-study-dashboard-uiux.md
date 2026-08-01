@@ -1826,7 +1826,7 @@ test("the bootstrap script is self-contained, synchronous, and fails closed to f
   assert.match(THEME_BOOTSTRAP_SCRIPT, /catch\(e\)\{[^}]*setAttribute\("data-theme","focus"\)[^}]*colorScheme="light"/);
 });
 
-test("globals.css defines every semantic token for all three themes and no chart token", () => {
+test("globals.css defines every semantic and chart token for all three themes", () => {
   const css = readFileSync(resolve(import.meta.dirname, "../src/app/globals.css"), "utf8");
   const tokens = [
     "--background", "--foreground", "--card", "--card-foreground", "--popover", "--popover-foreground",
@@ -5492,7 +5492,29 @@ Open the in-app browser at 1280×800 and confirm each of the following, capturin
 
 - [ ] **Step 7: Check the failure states**
 
-1. Stop the server, save `justStudyUiDbMode="$(stat -f '%Lp' "$justStudyUiRoot/just-study.sqlite")"`, run `chmod 000 "$justStudyUiRoot/just-study.sqlite"`, restart, and confirm `/`, `/courses`, and `/courses/[id]` each show the database alert with a `/status` link and never an empty state. Restore with `chmod "$justStudyUiDbMode" "$justStudyUiRoot/just-study.sqlite"` and then set `justStudyUiDbMode=""`; the trap is the fallback if any check aborts.
+1. Stop the current server, clear its PID, save and remove SQLite permissions, then restart the same Step 2 server under the supervisor variable:
+
+   ```bash
+   kill "$justStudyUiPid"
+   wait "$justStudyUiPid" || true
+   justStudyUiPid=""
+   justStudyUiDbMode="$(stat -f '%Lp' "$justStudyUiRoot/just-study.sqlite")"
+   chmod 000 "$justStudyUiRoot/just-study.sqlite"
+   if lsof -nP -iTCP:3000 -sTCP:LISTEN >/dev/null 2>&1; then exit 1; fi
+   env JUST_STUDY_DATA_DIR="$justStudyUiRoot" node node_modules/next/dist/bin/next dev -H 127.0.0.1 -p 3000 >"$justStudyUiRoot/dev-server.log" 2>&1 &
+   justStudyUiPid=$!
+   curl --retry 20 --retry-connrefused --retry-delay 1 -sS -o /dev/null http://127.0.0.1:3000/api/health
+   ```
+
+   Confirm `/`, `/courses`, and `/courses/[id]` each show the database alert with a `/status` link and never an empty state. Then restore permissions and prove the supervised server is healthy for the remaining checks:
+
+   ```bash
+   chmod "$justStudyUiDbMode" "$justStudyUiRoot/just-study.sqlite"
+   justStudyUiDbMode=""
+   curl --retry 20 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:3000/api/health
+   ```
+
+   The PID is cleared only after the old process is waited and reassigned immediately after the restart, so the trap always owns the one live test server. The saved mode remains non-empty until restoration succeeds, making the trap the fallback for every abort path.
 2. Append a byte to one course's `journal.md`, reload `/courses/[id]?tab=journal`, and confirm the damaged-document alert appears, the prose is not shown, the structured tabs still work, and the file on disk is unchanged.
 3. Confirm `/status` still reports the corrupt course.
 
