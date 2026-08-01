@@ -70,7 +70,7 @@ export function DraftFormView({
           maxLength={2000}
           rows={5}
           aria-describedby="draft-goal-help"
-          className="w-full resize-y bw border-border radius-md bg-input px-3 py-2 text-foreground"
+          className="tap-target w-full resize-y bw border-border radius-md bg-input px-3 py-2 text-foreground"
         />
         <p id="draft-goal-help" className="mt-1 mb-0 text-xs text-muted-foreground">
           1~2,000자로 입력해 주세요.

@@ -41,7 +41,7 @@ export function CourseFormView({
       <label htmlFor="course-goal">30일 뒤 학습 목표</label>
       <textarea
         id="course-goal"
-        className="w-full bw border-input radius-md bg-background px-3 py-2 text-foreground"
+        className="tap-target w-full bw border-input radius-md bg-background px-3 py-2 text-foreground"
         name="goal"
         minLength={1}
         maxLength={2000}

@@ -53,7 +53,7 @@ export function ReflectionFormView({
             maxLength={10000}
             rows={3}
             aria-describedby={`reflection-${name}-help`}
-            className="w-full resize-y bw border-border radius-md bg-input px-3 py-2 text-foreground"
+            className="tap-target w-full resize-y bw border-border radius-md bg-input px-3 py-2 text-foreground"
           />
           <p id={`reflection-${name}-help`} className="mt-1 mb-0 text-xs text-muted-foreground">
             1~10,000자로 입력해 주세요.
