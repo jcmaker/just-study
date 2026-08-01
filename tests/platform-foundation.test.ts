@@ -1450,6 +1450,40 @@ test("UI layout renders Korean language and semantic navigation", async () => {
   assert.match(html, /<main[^>]*>.*본문.*<\/main>/);
 });
 
+test("new standalone dashboard links expose 44px keyboard and pointer targets", async () => {
+  const assertTargetClasses = (className: string | undefined, label: string): void => {
+    assert.ok(className, `${label} link should render a class attribute`);
+    assert.match(className, /\btap-target\b/, `${label} link needs the 44px target utility`);
+    assert.match(className, /\binline-flex\b/, `${label} link needs inline-flex alignment`);
+    assert.match(className, /\bitems-center\b/, `${label} link needs vertical alignment`);
+  };
+  const { default: RootLayout } = await import("../src/app/layout.tsx");
+  const { default: NotFound } = await import("../src/app/not-found.tsx");
+  const { default: SettingsPage } = await import("../src/app/settings/page.tsx");
+  const shell = renderToStaticMarkup(createElement(RootLayout, null, createElement("p", null, "본문")));
+  const skipClass = /<a href="#main" class="([^"]*)">본문으로 건너뛰기<\/a>/.exec(shell)?.[1];
+  const brandClasses = [...shell.matchAll(/<a class="([^"]*)" href="\/">just-study<\/a>/g)].map((match) => match[1]);
+
+  assertTargetClasses(skipClass, "본문으로 건너뛰기");
+  assert.equal(brandClasses.length, 2);
+  for (const className of brandClasses) assertTargetClasses(className, "just-study");
+
+  const dataRoot = makeDataRoot();
+  setTestRuntime(dataRoot, null);
+  try {
+    const settings = renderToStaticMarkup(createElement(SettingsPage));
+    const settingsClass = /<a class="([^"]*)" href="\/status">상태 화면에서 자세히 보기<\/a>/.exec(settings)?.[1];
+    assertTargetClasses(settingsClass, "상태 화면에서 자세히 보기");
+  } finally {
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+
+  const notFound = renderToStaticMarkup(createElement(NotFound));
+  const homeClass = /<a class="([^"]*)" href="\/">과정 목록으로 돌아가기<\/a>/.exec(notFound)?.[1];
+  assertTargetClasses(homeClass, "과정 목록으로 돌아가기");
+});
+
 function makeCourseFormData(
   requestId: string,
   title: string,

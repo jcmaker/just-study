@@ -24,7 +24,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader title="시스템" description="데이터베이스와 저장소 점검 결과입니다." />
         <p className="mt-0 mb-3">{health.message}</p>
-        <Link href="/status" className="underline">상태 화면에서 자세히 보기</Link>
+        <Link href="/status" className="tap-target inline-flex items-center underline">상태 화면에서 자세히 보기</Link>
       </Card>
     </>
   );
