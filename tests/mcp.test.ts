@@ -4,8 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+
 import { CourseValidationError, createCourse } from "../src/server/courses.ts";
 import { openDatabase } from "../src/server/database.ts";
+import type { DatabaseHandle } from "../src/server/database.ts";
+import * as mcpRoute from "../src/app/mcp/route.ts";
 import {
   getLearningDocument,
   LearningRevisionConflictError,
@@ -66,4 +70,136 @@ test("maps known failures without leaking raw internals", () => {
 test("creates an official MCP server with a health tool", () => {
   assert.equal(typeof createJustStudyMcpServer().registerTool, "function");
   assert.equal(typeof mcpHandler.fetch, "function");
+});
+
+type TestRuntimeGlobal = typeof globalThis & {
+  __justStudyRuntime?: { dataRoot: string; db: DatabaseHandle | null };
+};
+
+function setTestRuntime(dataRoot: string, db: DatabaseHandle | null): void {
+  (globalThis as TestRuntimeGlobal).__justStudyRuntime = { dataRoot, db };
+}
+
+function clearTestRuntime(): void {
+  delete (globalThis as TestRuntimeGlobal).__justStudyRuntime;
+}
+
+function mcpRequest(body: BodyInit, headers: Record<string, string> = {}): Request {
+  return new Request("http://127.0.0.1:3000/mcp", {
+    method: "POST",
+    headers: {
+      host: "127.0.0.1:3000",
+      "content-type": "application/json",
+      ...headers,
+    },
+    body,
+  });
+}
+
+test("exports only POST for the MCP route", () => {
+  assert.equal(typeof mcpRoute.POST, "function");
+  assert.equal("GET" in mcpRoute, false);
+  assert.equal("DELETE" in mcpRoute, false);
+  assert.equal("OPTIONS" in mcpRoute, false);
+});
+
+test("rejects non-local Host and mismatched Origin before MCP parsing", async () => {
+  clearTestRuntime();
+  const badHost = await mcpRoute.POST(mcpRequest("{}", { host: "example.com" }));
+  const badOrigin = await mcpRoute.POST(mcpRequest("{}", { origin: "http://evil.test" }));
+  assert.equal(badHost.status, 403);
+  assert.equal(badOrigin.status, 403);
+  assert.equal(badHost.headers.has("access-control-allow-origin"), false);
+  assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime, undefined);
+});
+
+test("rejects unsupported media types and oversized streamed bodies", async () => {
+  clearTestRuntime();
+  const wrongType = mcpRequest("{}", { "content-type": "text/plain" });
+  assert.equal((await mcpRoute.POST(wrongType)).status, 415);
+
+  const oversized = new Uint8Array(8 * 1024 * 1024 + 1);
+  assert.equal((await mcpRoute.POST(mcpRequest(oversized))).status, 413);
+  assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime, undefined);
+});
+
+test("rejects malformed JSON before any tool mutation", async () => {
+  clearTestRuntime();
+  const response = await mcpRoute.POST(mcpRequest("{", {
+    accept: "application/json, text/event-stream",
+  }));
+  const body = await response.text();
+  assert.equal(response.status, 400);
+  assert.equal(body.includes("/private/"), false);
+  assert.equal(body.includes("SQLITE"), false);
+  assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime, undefined);
+});
+
+test("keeps MCP subscriptions disabled", async () => {
+  const response = await mcpRoute.POST(mcpRequest(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: "listen-disabled",
+      method: "subscriptions/listen",
+      params: {
+        notifications: { toolsListChanged: true },
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      },
+    }),
+    {
+      accept: "application/json, text/event-stream",
+      "mcp-method": "subscriptions/listen",
+      "mcp-protocol-version": "2026-07-28",
+    },
+  ));
+  const body = await response.json() as { error?: { code?: number; message?: string } };
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type")?.includes("text/event-stream"), false);
+  assert.equal(body.error?.code, -32603);
+  assert.equal(body.error?.message, "Subscription limit reached");
+});
+
+async function withMcpClient<T>(run: (client: Client) => Promise<T>): Promise<T> {
+  const transport = new StreamableHTTPClientTransport(
+    new URL("http://127.0.0.1:3000/mcp"),
+    {
+      fetch: (input, init) => {
+        const request = new Request(input, init);
+        request.headers.set("host", "127.0.0.1:3000");
+        return mcpRoute.POST(request);
+      },
+    },
+  );
+  const client = new Client(
+    { name: "just-study-test", version: "1.0.0" },
+    { versionNegotiation: { mode: "auto" } },
+  );
+  await client.connect(transport);
+  try {
+    return await run(client);
+  } finally {
+    await client.close();
+  }
+}
+
+test("negotiates Streamable HTTP and lists health", { concurrency: false }, async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+  try {
+    await withMcpClient(async (client) => {
+      assert.equal(client.getProtocolEra(), "modern");
+      const tools = (await client.listTools()).tools;
+      const health = tools.find(({ name }) => name === "health");
+      assert.ok(health);
+      assert.equal(health.annotations?.readOnlyHint, true);
+    });
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
 });
