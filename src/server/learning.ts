@@ -1,7 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { DatabaseHandle } from "./database.ts";
-import { UUID_PATTERN, getCourse, type Course, type LearningPreference } from "./courses.ts";
+import {
+  UUID_PATTERN,
+  getCourse,
+  normalizeCourseTitleAndGoal,
+  renderCourseShellMarkdown,
+  type Course,
+  type LearningPreference,
+} from "./courses.ts";
 import {
   applyMarkdownUpdate,
   completeMarkdownUpdate,
@@ -1010,4 +1017,50 @@ export function getLearningDocument(
     throw new LearningStateError("Document registration is incomplete");
   }
   return { course, document, markdown: readVerifiedMarkdown(dataRoot, path, checksum) };
+}
+
+export function updateCourseDraft(
+  db: DatabaseHandle,
+  dataRoot: string,
+  input: { courseId: string; expectedRevision: number; title: string; goal: string },
+): Course {
+  if (
+    typeof input !== "object" ||
+    input === null ||
+    Array.isArray(input) ||
+    !UUID_PATTERN.test(input.courseId)
+  ) {
+    throw new LearningValidationError("courseId is invalid");
+  }
+  const { title, goal } = normalizeCourseTitleAndGoal(input.title, input.goal);
+
+  const course = getCourse(db, input.courseId);
+  if (!course) throw new LearningStateError("Course does not exist");
+  assertRevision(course, input.expectedRevision);
+  if (course.status !== "draft") {
+    throw new LearningStateError("Only a draft course can be edited");
+  }
+
+  const now = new Date().toISOString();
+  const update = prepareMarkdownUpdate(dataRoot, course.id, [
+    {
+      file: "course.md",
+      expectedSha256: course.markdownSha256,
+      content: renderCourseShellMarkdown(title, goal),
+    },
+  ]);
+
+  commitPreparedUpdate(db, update, () => {
+    const latest = getCourse(db, course.id);
+    if (!latest || latest.status !== "draft") {
+      throw new LearningStateError("Course is no longer a draft");
+    }
+    assertRevision(latest, input.expectedRevision);
+    db.prepare(
+      "UPDATE courses SET title = ?, goal = ?, markdown_sha256 = ? WHERE id = ?",
+    ).run(title, goal, update.checksums["course.md"]!, course.id);
+    advanceRevision(db, course.id, input.expectedRevision, now);
+  });
+
+  return getCourse(db, course.id)!;
 }

@@ -1,12 +1,20 @@
 "use server";
 
+import { revalidatePath } from "next/cache.js";
 import { redirect } from "next/navigation.js";
 
 import {
   CourseValidationError,
   createCourse,
 } from "../server/courses.ts";
+import {
+  LearningRevisionConflictError,
+  updateCourseDraft,
+} from "../server/learning.ts";
 import { getRuntime, requireDatabase } from "../server/runtime.ts";
+
+import type { DraftEditState } from "./action-state.ts";
+import { draftErrorMessage } from "./error-messages.ts";
 
 export type CreateCourseState = { error: string | null };
 
@@ -33,4 +41,44 @@ export async function createCourseAction(
   }
 
   redirect(`/courses/${courseId}`);
+}
+
+export async function updateCourseDraftAction(
+  _previous: DraftEditState,
+  formData: FormData,
+): Promise<DraftEditState> {
+  const title = String(formData.get("title") ?? "");
+  const goal = String(formData.get("goal") ?? "");
+  const courseId = String(formData.get("courseId") ?? "");
+  const rawExpectedRevision = formData.get("expectedRevision");
+  const expectedRevision =
+    rawExpectedRevision === null || rawExpectedRevision === ""
+      ? Number.NaN
+      : Number(rawExpectedRevision);
+
+  try {
+    const runtime = getRuntime();
+    updateCourseDraft(requireDatabase(runtime), runtime.dataRoot, {
+      courseId,
+      expectedRevision,
+      title,
+      goal,
+    });
+  } catch (error) {
+    if (error instanceof LearningRevisionConflictError) {
+      return {
+        status: "conflict",
+        message:
+          "다른 곳에서 이 과정이 먼저 저장됐습니다. 입력한 내용은 그대로 두었습니다. 최신 상태를 불러온 뒤 다시 저장해 주세요.",
+        title,
+        goal,
+      };
+    }
+    return { status: "error", message: draftErrorMessage(error), title, goal };
+  }
+
+  revalidatePath(`/courses/${courseId}`);
+  revalidatePath("/courses");
+  revalidatePath("/");
+  return { status: "saved", message: "과정 정보를 저장했습니다.", title, goal };
 }

@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import { createCourse } from "../src/server/courses.ts";
+import {
+  CourseValidationError,
+  createCourse,
+  getCourseDocument,
+} from "../src/server/courses.ts";
 import { getDashboardOverview } from "../src/server/dashboard.ts";
 import { parseMarkdown, type MarkdownBlock } from "../src/server/markdown.ts";
 import {
@@ -31,12 +41,16 @@ import {
   gradeQuiz,
   getCourseHistory,
   getLearningSnapshot,
+  LearningRevisionConflictError,
+  LearningStateError,
+  LearningValidationError,
   recordDailyResearch,
   saveLearningCheckpoint,
   startQuiz,
+  updateCourseDraft,
 } from "../src/server/learning.ts";
 import { renderApprovedCourseMarkdown } from "../src/server/learning-markdown.ts";
-import { StorageError } from "../src/server/storage.ts";
+import { listTemporaryEntries, StorageError } from "../src/server/storage.ts";
 import {
   applyTheme,
   DEFAULT_THEME,
@@ -48,6 +62,11 @@ import {
   themeAttributes,
 } from "../src/app/theme.ts";
 import { NAV_ITEMS, isActiveNav } from "../src/app/nav-items.ts";
+import {
+  draftErrorMessage as draftErrorMessageForTest,
+  reflectionErrorMessage as reflectionErrorMessageForTest,
+} from "../src/app/error-messages.ts";
+import { updateCourseDraftAction } from "../src/app/actions.ts";
 
 function makeDataRoot(): string {
   return mkdtempSync(join(tmpdir(), "just-study-dashboard-"));
@@ -937,4 +956,255 @@ test("active navigation matches the section, not a prefix accident", () => {
   assert.equal(isActiveNav("/coursesomething", "/courses"), false);
   assert.equal(isActiveNav("/settings", "/settings"), true);
   assert.equal(isActiveNav("/status", "/settings"), false);
+});
+
+test("draft editing updates SQLite and Markdown together and bumps the revision", () => {
+  withRuntime((db, dataRoot) => {
+    const created = createCourse(db, dataRoot, {
+      requestId: crypto.randomUUID(),
+      title: "옛 제목",
+      goal: "옛 목표",
+    }).course;
+
+    const updated = updateCourseDraft(db, dataRoot, {
+      courseId: created.id,
+      expectedRevision: 0,
+      title: "새 제목",
+      goal: "새 목표를 30일 뒤에 달성한다.",
+    });
+
+    assert.equal(updated.title, "새 제목");
+    assert.equal(updated.goal, "새 목표를 30일 뒤에 달성한다.");
+    assert.equal(updated.revision, 1);
+    assert.equal(updated.status, "draft");
+    assert.notEqual(updated.markdownSha256, created.markdownSha256);
+    assert.equal(Number.isNaN(Date.parse(updated.updatedAt)), false);
+    assert.equal(Date.parse(updated.updatedAt) >= Date.parse(created.updatedAt), true);
+
+    const document = getCourseDocument(db, dataRoot, created.id)!;
+    assert.match(document.markdown, /새 제목/);
+    assert.match(document.markdown, /새 목표를 30일 뒤에 달성한다/);
+    assert.equal(document.markdown.includes("옛 제목"), false);
+  });
+});
+
+test("draft editing rejects invalid input, stale revisions, and non-draft courses without changing anything", () => {
+  withRuntime((db, dataRoot) => {
+    const created = createCourse(db, dataRoot, {
+      requestId: crypto.randomUUID(),
+      title: "제목",
+      goal: "목표",
+    }).course;
+
+    assert.throws(
+      () => updateCourseDraft(db, dataRoot, { courseId: created.id, expectedRevision: 0, title: "   ", goal: "목표" }),
+      CourseValidationError,
+    );
+    assert.throws(
+      () => updateCourseDraft(db, dataRoot, { courseId: created.id, expectedRevision: 0, title: "x".repeat(121), goal: "목표" }),
+      CourseValidationError,
+    );
+    assert.throws(
+      () => updateCourseDraft(db, dataRoot, { courseId: created.id, expectedRevision: 0, title: "줄\n바꿈", goal: "목표" }),
+      CourseValidationError,
+    );
+    assert.throws(
+      () => updateCourseDraft(db, dataRoot, { courseId: created.id, expectedRevision: 1, title: "제목", goal: "목표" }),
+      LearningRevisionConflictError,
+    );
+    assert.throws(
+      () => updateCourseDraft(db, dataRoot, { courseId: crypto.randomUUID(), expectedRevision: 0, title: "제목", goal: "목표" }),
+      LearningStateError,
+    );
+
+    const unchanged = getCourseDocument(db, dataRoot, created.id)!;
+    assert.equal(unchanged.course.revision, 0);
+    assert.equal(unchanged.course.title, "제목");
+    assert.equal(unchanged.course.markdownSha256, created.markdownSha256);
+
+    const approved = approve(db, dataRoot, "활성 과정", [
+      "https://active.example.edu/a",
+      "https://active.example.org/b",
+    ]);
+    assert.throws(
+      () => updateCourseDraft(db, dataRoot, {
+        courseId: approved.course.id,
+        expectedRevision: approved.course.revision,
+        title: "바꾸기",
+        goal: "바꾸기",
+      }),
+      LearningStateError,
+    );
+    assert.equal(getCourseHistory(db, approved.course.id)!.course.title, "활성 과정");
+  });
+});
+
+test("a failure inside the draft transaction leaves neither SQLite nor Markdown changed", () => {
+  withRuntime((db, dataRoot) => {
+    const created = createCourse(db, dataRoot, {
+      requestId: crypto.randomUUID(),
+      title: "원래 제목",
+      goal: "원래 목표",
+    }).course;
+    const before = getCourseDocument(db, dataRoot, created.id)!;
+
+    const original = db.prepare.bind(db);
+    let armed = true;
+    (db as { prepare: typeof db.prepare }).prepare = ((sql: string) => {
+      if (armed && sql.includes("UPDATE courses SET title = ?")) {
+        armed = false;
+        original("UPDATE courses SET revision = revision + 1 WHERE id = ?").run(
+          created.id,
+        );
+      }
+      return original(sql);
+    }) as typeof db.prepare;
+
+    try {
+      assert.throws(
+        () =>
+          updateCourseDraft(db, dataRoot, {
+            courseId: created.id,
+            expectedRevision: 0,
+            title: "새 제목",
+            goal: "새 목표",
+          }),
+        LearningRevisionConflictError,
+      );
+    } finally {
+      (db as { prepare: typeof db.prepare }).prepare = original as typeof db.prepare;
+    }
+
+    const after = getCourseDocument(db, dataRoot, created.id)!;
+    assert.equal(after.markdown, before.markdown);
+    assert.equal(after.course.title, "원래 제목");
+    assert.equal(after.course.goal, "원래 목표");
+    assert.equal(after.course.markdownSha256, before.course.markdownSha256);
+    assert.equal(after.course.revision, 0);
+    assert.deepEqual(listTemporaryEntries(dataRoot), []);
+  });
+});
+
+test("actions never surface raw engine English to the user", () => {
+  const engineMessages = [
+    "Only a draft course can be edited",
+    "Course does not exist",
+    "Course is no longer a draft",
+    "expectedRevision must be a non-negative integer",
+    "Day completion requires reflection stage",
+    "reflection.learned is outside its allowed length",
+    "Daily research and a passed quiz are required",
+  ];
+  const mapped = [
+    ...engineMessages.map((raw) =>
+      draftErrorMessageForTest(new LearningStateError(raw)),
+    ),
+    ...engineMessages.map((raw) =>
+      draftErrorMessageForTest(new LearningValidationError(raw)),
+    ),
+    ...engineMessages.map((raw) =>
+      reflectionErrorMessageForTest(new LearningStateError(raw)),
+    ),
+    ...engineMessages.map((raw) =>
+      reflectionErrorMessageForTest(new LearningValidationError(raw)),
+    ),
+    draftErrorMessageForTest(new Error("SQLITE_BUSY: database is locked")),
+    reflectionErrorMessageForTest(
+      new Error("EACCES: permission denied, open '/private/data/x.md'"),
+    ),
+  ];
+
+  for (const message of mapped) {
+    assert.ok(message.length > 0);
+    const latin = message.replaceAll("/status", "").match(/[A-Za-z]{3,}/g) ?? [];
+    assert.deepEqual(latin, [], message);
+    for (const raw of engineMessages) {
+      assert.equal(message.includes(raw), false, message);
+    }
+    assert.equal(message.includes("SQLITE"), false, message);
+    assert.equal(message.includes("/private/"), false, message);
+  }
+
+  assert.equal(
+    draftErrorMessageForTest(
+      new CourseValidationError("과정 제목은 줄바꿈 없이 1~120자여야 합니다."),
+    ),
+    "과정 제목은 줄바꿈 없이 1~120자여야 합니다.",
+  );
+});
+
+test("modules reachable from client components import no server-only code", () => {
+  const appRoot = resolve(import.meta.dirname, "../src/app");
+  const clientEntry = [
+    "draft-form.tsx",
+    "reflection-form.tsx",
+    "copy-command.tsx",
+    "theme-picker.tsx",
+    "new-course-panel.tsx",
+    "nav.tsx",
+  ];
+  const seen = new Set<string>();
+
+  function walk(file: string): void {
+    if (seen.has(file) || !existsSync(file)) return;
+    seen.add(file);
+    const source = readFileSync(file, "utf8");
+    if (/^[\s\S]*?^["']use server["'];/m.test(source)) return;
+    assert.equal(/from "node:/.test(source), false, `${file} imports a Node builtin`);
+    assert.equal(
+      source.includes("better-sqlite3"),
+      false,
+      `${file} imports better-sqlite3`,
+    );
+    assert.equal(
+      /from "\.\.\/server\//.test(source) ||
+        /from "\.\.\/\.\.\/server\//.test(source) ||
+        /from "\.\.\/\.\.\/\.\.\/server\//.test(source),
+      false,
+      `${file} reaches into src/server`,
+    );
+    for (const [, specifier] of source.matchAll(/from "(\.[^"]+)"/g)) {
+      walk(resolve(file, "..", specifier));
+    }
+  }
+
+  for (const entry of clientEntry) walk(resolve(appRoot, entry));
+  assert.ok(seen.size >= clientEntry.length);
+});
+
+test("a draft action rejects a missing revision without mutating the course", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    __justStudyRuntime?: { dataRoot: string; db: DatabaseHandle | null };
+  };
+  const previousRuntime = runtimeGlobal.__justStudyRuntime;
+  runtimeGlobal.__justStudyRuntime = { dataRoot, db };
+
+  try {
+    const course = createCourse(db, dataRoot, {
+      requestId: crypto.randomUUID(),
+      title: "수정 전 제목",
+      goal: "수정 전 목표",
+    }).course;
+    const formData = new FormData();
+    formData.set("courseId", course.id);
+    formData.set("title", "수정 후 제목");
+    formData.set("goal", "수정 후 목표");
+
+    const state = await updateCourseDraftAction({} as never, formData);
+
+    assert.equal(state.status, "error");
+    assert.equal(state.title, "수정 후 제목");
+    assert.equal(state.goal, "수정 후 목표");
+    const unchanged = getCourseDocument(db, dataRoot, course.id)!;
+    assert.equal(unchanged.course.revision, 0);
+    assert.equal(unchanged.course.title, "수정 전 제목");
+    assert.equal(unchanged.course.goal, "수정 전 목표");
+  } finally {
+    db.close();
+    if (previousRuntime === undefined) delete runtimeGlobal.__justStudyRuntime;
+    else runtimeGlobal.__justStudyRuntime = previousRuntime;
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
 });

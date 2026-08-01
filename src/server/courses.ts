@@ -110,9 +110,7 @@ function normalizeInput(input: CreateCourseInput): CreateCourseInput {
   if (
     typeof input !== "object" ||
     input === null ||
-    typeof input.requestId !== "string" ||
-    typeof input.title !== "string" ||
-    typeof input.goal !== "string"
+    typeof input.requestId !== "string"
   ) {
     throw new CourseValidationError("과정 요청 형식이 올바르지 않습니다.");
   }
@@ -121,24 +119,39 @@ function normalizeInput(input: CreateCourseInput): CreateCourseInput {
     throw new CourseValidationError("요청 ID가 올바른 UUID가 아닙니다.");
   }
 
-  const title = input.title.trim();
-  const goal = input.goal.trim();
-
-  if (title.length < 1 || title.length > 120 || /[\r\n]/.test(title)) {
-    throw new CourseValidationError("과정 제목은 줄바꿈 없이 1~120자여야 합니다.");
-  }
-  if (goal.length < 1 || goal.length > 2_000) {
-    throw new CourseValidationError("학습 목표는 1~2,000자여야 합니다.");
-  }
-
-  return { requestId: input.requestId, title, goal };
+  return {
+    requestId: input.requestId,
+    ...normalizeCourseTitleAndGoal(input.title, input.goal),
+  };
 }
 
 function escapeMarkdown(value: string): string {
   return value.replace(MARKDOWN_PUNCTUATION, "\\$&");
 }
 
-function renderMarkdown(title: string, goal: string): string {
+export function normalizeCourseTitleAndGoal(
+  title: unknown,
+  goal: unknown,
+): { title: string; goal: string } {
+  if (typeof title !== "string" || typeof goal !== "string") {
+    throw new CourseValidationError("과정 요청 형식이 올바르지 않습니다.");
+  }
+  const normalizedTitle = title.trim();
+  const normalizedGoal = goal.trim();
+  if (
+    normalizedTitle.length < 1 ||
+    normalizedTitle.length > 120 ||
+    /[\r\n]/.test(normalizedTitle)
+  ) {
+    throw new CourseValidationError("과정 제목은 줄바꿈 없이 1~120자여야 합니다.");
+  }
+  if (normalizedGoal.length < 1 || normalizedGoal.length > 2_000) {
+    throw new CourseValidationError("학습 목표는 1~2,000자여야 합니다.");
+  }
+  return { title: normalizedTitle, goal: normalizedGoal };
+}
+
+export function renderCourseShellMarkdown(title: string, goal: string): string {
   const quotedGoal = goal
     .split(/\r\n?|\n/)
     .map((line) => `> ${escapeMarkdown(line)}`)
@@ -192,7 +205,11 @@ export function createCourse(
       id, request_id, title, goal, markdown_path, markdown_sha256, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const draft = prepareCourseFiles(dataRoot, id, renderMarkdown(input.title, input.goal));
+  const draft = prepareCourseFiles(
+    dataRoot,
+    id,
+    renderCourseShellMarkdown(input.title, input.goal),
+  );
 
   try {
     db.transaction(() => {
