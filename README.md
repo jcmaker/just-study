@@ -66,27 +66,63 @@ and login are separate phases.
 
 ## Codex integration
 
-1. Start the server first: `npm run dev`. The MCP endpoint is only reachable
-   while the server is running.
-2. Codex reads the connection from `.codex/config.toml`:
+The MCP endpoint is only reachable while the server is running
+(`npm run dev`). Codex reads the connection from `.codex/config.toml`:
 
-   ```toml
-   [mcp_servers.just-study]
-   url = "http://127.0.0.1:3000/mcp"
-   required = false
-   default_tools_approval_mode = "writes"
-   ```
+```toml
+[mcp_servers.just-study]
+url = "http://127.0.0.1:3000/mcp"
+required = false
+default_tools_approval_mode = "writes"
+```
 
-3. In Codex, invoke `$just-study` to create a course; the skill first checks
-   for a matching saved course and asks whether to continue it instead. Invoke
-   `$just-study 계속` to resume a saved course, choosing one when several
-   exist.
-4. The skill (`.agents/skills/just-study/SKILL.md`) does the research,
-   teaching, and grading itself; the server only stores and validates state
-   over MCP — it never calls a model or browses the web.
+The skill (`.agents/skills/just-study/SKILL.md`) does the research, teaching,
+and grading itself; the server only stores and validates state over MCP. See
+"Codex learning workflow" below for how to invoke it and the twelve MCP tools
+it uses.
+
+## Codex learning workflow
+
+Start the localhost application:
+
+```bash
+npm run dev
+```
+
+From a trusted Codex session opened in this repository, invoke `$just-study`
+to create a course or `$just-study 계속` to resume. The project config
+connects Codex to `http://127.0.0.1:3000/mcp`; write tools ask for approval.
+If the server is stopped, the skill reports the command above instead of
+fabricating progress.
+
+`$just-study` first checks for a matching saved course and asks whether to
+continue it instead of creating a new one. `$just-study 계속` resumes a saved
+course, asking which one when several exist.
+
+The default self-host mode is single-user and localhost-only. It has no
+signup, account, login, OAuth, remote binding, or server-side model/API key.
+Codex performs web research and stores only the URLs and claims it supplies
+through MCP.
 
 Real Codex CLI acceptance testing of this end-to-end flow has not been run
 yet.
+
+### MCP tools
+
+| Tool | Type | What it does |
+|---|---|---|
+| `health` | read | Checks the local database, Markdown storage, schema, and recovery state. |
+| `list_courses` | read | Lists local courses with resumable Day, stage, and revision state. |
+| `get_learning_state` | read | Reads the saved current Day, stage, research, concepts, quiz, and current Day Markdown. |
+| `read_learning_document` | read | Reads one fixed, checksum-verified course, progress, journal, or current-day Markdown document. |
+| `create_course` | write | Creates one local draft course idempotently from a reusable request UUID. |
+| `approve_outline` | write | Activates a draft only after the user approves its interview, research, knowledge map, and exactly 30 objectives. |
+| `record_daily_research` | write | Stores sources and cross-checked claims actually researched by Codex for the current Day. |
+| `save_checkpoint` | write | Persists supplied lesson content and concept status for the current allowed stage. |
+| `start_quiz` | write | Stores exactly five questions fixed before seeing the learner's answers. |
+| `grade_quiz` | write | Stores one to five supplied answers, judgments, feedback, and optional clarification without inventing answers. |
+| `start_remediation_quiz` | write | Stores a different explanation and five new questions covering every remediation concept. |
+| `complete_day` | write | Stores three reflections after verified daily research and a passed five-of-five quiz. |
 
 ## 학습 대시보드
 
