@@ -1745,3 +1745,68 @@ test("the today tab mounts the reflection form only during the reflection stage"
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+test("README documents the real dashboard routes, themes, and edit boundary", () => {
+  const readme = readFileSync(resolve(import.meta.dirname, "../README.md"), "utf8");
+  for (const fragment of [
+    "/courses",
+    "/settings",
+    "/status",
+    "just-study:theme",
+    "Focus",
+    "Calm",
+    "Focus Dark",
+    "127.0.0.1",
+  ]) {
+    assert.ok(readme.includes(fragment), `README is missing ${fragment}`);
+  }
+  assert.match(readme, /로그인|계정/);
+  assert.match(readme, /초안/);
+  assert.match(readme, /회고/);
+  for (const marker of ["TO" + "DO", "TB" + "D", "FIX" + "ME"]) {
+    assert.equal(readme.includes(marker), false);
+  }
+});
+
+test("route loading boundaries announce progress without leaking content", async () => {
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    __justStudyRuntime?: { dataRoot: string; db: DatabaseHandle | null };
+  };
+  const hadRuntime = Object.prototype.hasOwnProperty.call(runtimeGlobal, "__justStudyRuntime");
+  const previousRuntime = runtimeGlobal.__justStudyRuntime;
+  delete runtimeGlobal.__justStudyRuntime;
+
+  try {
+    const boundaries: Array<{ path: string; srText: string }> = [
+      { path: "../src/app/loading.tsx", srText: "오늘 화면을 불러오는 중입니다." },
+      { path: "../src/app/courses/loading.tsx", srText: "과정 목록을 불러오는 중입니다." },
+      { path: "../src/app/courses/[id]/loading.tsx", srText: "과정을 불러오는 중입니다." },
+    ];
+
+    for (const { path, srText } of boundaries) {
+      const { default: LoadingComponent } = await import(path);
+      let markup: string | undefined;
+      assert.doesNotThrow(() => {
+        markup = renderToStaticMarkup(createElement(LoadingComponent));
+      }, `${path} must render without touching the runtime/database`);
+      assert.ok(markup, `${path} produced no markup`);
+
+      assert.match(markup!, /aria-busy="true"/);
+      assert.match(markup!, /aria-live="polite"/);
+      assert.match(markup!, new RegExp(`<p class="sr-only">${srText}</p>`));
+
+      const hiddenSkeletons = markup!.match(/aria-hidden="true"/g) ?? [];
+      assert.ok(hiddenSkeletons.length >= 1, `${path} must render at least one aria-hidden skeleton`);
+
+      const visibleText = markup!
+        .replace(/<[^>]*aria-hidden="true"[^>]*>[\s\S]*?<\/[a-zA-Z0-9]+>/g, "")
+        .replace(/<[^>]*aria-hidden="true"[^>]*\/>/g, "")
+        .replace(/<[^>]+>/g, "")
+        .trim();
+      assert.equal(visibleText, srText, `${path} leaks visible text beyond the sr-only announcement`);
+    }
+  } finally {
+    if (hadRuntime) runtimeGlobal.__justStudyRuntime = previousRuntime;
+    else delete runtimeGlobal.__justStudyRuntime;
+  }
+});
