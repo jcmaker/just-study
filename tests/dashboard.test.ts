@@ -1222,6 +1222,7 @@ test("draft form constrains fields and preserves submitted values across outcome
   }
   assert.match(idle, /<label[^>]*for="draft-title"[^>]*>과정 제목<\/label>/);
   assert.match(idle, /<label[^>]*for="draft-goal"[^>]*>학습 목표<\/label>/);
+  assert.match(idle, /<p[^>]*aria-live="polite"[^>]*><\/p>/);
 
   const error = renderForm({
     status: "error",
@@ -1262,7 +1263,10 @@ test("draft form constrains fields and preserves submitted values across outcome
   assert.match(revalidated, /value="최신 서버 제목"/);
   assert.match(revalidated, />최신 서버 목표<\/textarea>/);
   assert.doesNotMatch(revalidated, /정규화 전 제출/);
-  assert.match(revalidated, /aria-live="polite"/);
+  assert.match(
+    revalidated,
+    /<p[^>]*aria-live="polite"[^>]*>과정 정보를 저장했습니다\.<\/p>/,
+  );
 });
 
 test("course overview mounts the draft editor only while the course is a draft", async () => {

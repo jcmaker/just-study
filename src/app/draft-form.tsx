@@ -96,11 +96,9 @@ export function DraftFormView({
           {state.message}
         </p>
       ) : null}
-      {state.status === "saved" ? (
-        <p className="m-0 text-sm text-muted-foreground" aria-live="polite">
-          {state.message}
-        </p>
-      ) : null}
+      <p className="m-0 text-sm text-muted-foreground" aria-live="polite">
+        {state.status === "saved" ? state.message : ""}
+      </p>
 
       <div>
         <button
