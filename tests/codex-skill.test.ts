@@ -43,6 +43,17 @@ test("names every approved tool and all research safety invariants", () => {
     assert.match(skill, new RegExp(phrase));
 });
 
+test("pins the mutually exclusive checkpoint shapes and the health ok:false rule", () => {
+  for (const phrase of [
+    "must include both `understoodConcepts` and `remediationConcepts`",
+    "must never include `remediationMarkdown`",
+    "must omit both `understoodConcepts` and `remediationConcepts`",
+    "mutually exclusive shapes",
+    "reports `ok: false`",
+  ])
+    assert.match(skill, new RegExp(phrase));
+});
+
 test("keeps project MCP config aligned with the skill dependency", () => {
   assert.match(config, /\[mcp_servers\.just-study\]/);
   assert.match(config, /url = "http:\/\/127\.0\.0\.1:3000\/mcp"/);

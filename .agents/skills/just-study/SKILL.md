@@ -9,7 +9,7 @@ Use the local `just-study` MCP as the only source of persisted course state. Per
 
 ## Invariants
 
-1. Call `health` first. If unavailable, tell the user to run `npm run dev` in the repository and stop.
+1. Call `health` first. If the call itself is unavailable, tell the user to run `npm run dev` in the repository and stop. If `health` returns but reports `ok: false`, surface its Korean `message` to the user — it describes a schema mismatch, storage inconsistency, or corrupt, orphaned, or temporary entries — and stop.
 2. Use the latest saved `revision` for every write except `create_course`.
 3. On `REVISION_CONFLICT`, read state again and explain the conflict. Do not replay the write automatically.
 4. On `STORAGE_CORRUPT`, stop. Do not overwrite or attempt repair through MCP.
@@ -40,7 +40,7 @@ Call `list_courses` after health.
 
 1. If the current Day has no Day research, define its questions and criteria, browse actual sources, cross-check claims, and call `record_daily_research`.
 2. Teach recall, precise explanation, ELI5, analogy, worked example, application, and an understanding interview.
-3. Ask one understanding question at a time. Record only content actually taught and the user's demonstrated concept status with `save_checkpoint`.
+3. Ask one understanding question at a time. Record only content actually taught and the user's demonstrated concept status with `save_checkpoint`. Every lecture-stage `save_checkpoint` call must include both `understoodConcepts` and `remediationConcepts` — use empty arrays before any concept status is known — and must never include `remediationMarkdown`.
 4. When the seven parts are complete, create exactly five distinct questions before showing any of them. Call `start_quiz`, then present the first saved question.
 
 ### Quiz
@@ -54,7 +54,7 @@ Call `list_courses` after health.
 ### Remediation
 
 1. Explain each saved remediation concept in a materially different way with a new analogy or example.
-2. Save only `remediationMarkdown` with `save_checkpoint`.
+2. Save only `remediationMarkdown` with `save_checkpoint`; a remediation-stage checkpoint must omit both `understoodConcepts` and `remediationConcepts`. Lecture and remediation checkpoints take mutually exclusive shapes — never mix them.
 3. Create five new prompts that cover every remediation concept and do not repeat an earlier prompt. Call `start_remediation_quiz` and return to the quiz flow.
 
 ### Reflection
