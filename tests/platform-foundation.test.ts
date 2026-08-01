@@ -1793,7 +1793,7 @@ test("UI root renders safe recovery guidance when the database is unavailable", 
   }
 });
 
-test("UI detail renders exact title and verified Markdown as text", async () => {
+test("UI course workspace normalizes the tab and renders verified Markdown safely", async () => {
   const { default: CoursePage } = await import(
     "../src/app/courses/[id]/page.tsx"
   );
@@ -1808,17 +1808,75 @@ test("UI detail renders exact title and verified Markdown as text", async () => 
 
   try {
     const html = renderToStaticMarkup(
-      await CoursePage({ params: Promise.resolve({ id: created.course.id }) }),
+      await CoursePage({
+        params: Promise.resolve({ id: created.course.id }),
+        searchParams: Promise.resolve({ tab: ["today"] }),
+      }),
     );
-    assert.match(html, /<h1>&lt;웹&gt; &amp; API<\/h1>/);
-    assert.match(html, /# \\&lt;웹\\&gt; \\&amp; API/);
-    assert.match(html, /요청 \\&gt; 응답을 그대로 설명한다\\\./);
+    assert.match(html, /<h1[^>]*>&lt;웹&gt; &amp; API<\/h1>/);
+    assert.match(html, /과정 문서/);
+    assert.match(html, /aria-current="page"[^>]*>개요<\/a>/);
+    assert.match(html, /요청 &gt; 응답을 그대로 설명한다\./);
     assert.equal(html.includes("<script>"), false);
   } finally {
     db.close();
     clearTestRuntime();
     rmSync(dataRoot, { recursive: true, force: true });
   }
+});
+
+test("course workspace renders six safe tabs, touch targets, and literal Markdown", async () => {
+  const { MarkdownView } = await import("../src/app/ui/markdown-view.tsx");
+  const { CourseTabStrip, DocumentPanel } = await import("../src/app/courses/[id]/tabs.tsx");
+  const courseId = "90000000-0000-4000-8000-000000000025";
+
+  const tabs = renderToStaticMarkup(createElement(CourseTabStrip, { courseId, active: "today" }));
+  for (const [tab, label] of [
+    ["overview", "개요"],
+    ["plan", "30일 계획"],
+    ["today", "오늘"],
+    ["sources", "출처"],
+    ["quiz", "퀴즈"],
+    ["journal", "학습 기록"],
+  ] as const) {
+    const link = new RegExp(`<a[^>]*href="/courses/${courseId}\\?tab=${tab}"[^>]*>(?:<[^>]+>)*${label}`).exec(tabs)?.[0] ?? "";
+    assert.match(link, /\btap-target\b/);
+    assert.match(link, /\binline-flex\b/);
+    assert.match(link, /\bitems-center\b/);
+  }
+  assert.match(tabs, /aria-current="page"/);
+
+  const markdown = renderToStaticMarkup(createElement(MarkdownView, {
+    markdown: "<script>alert(1)</script>\\n\\n[안전한 출처](https://example.edu/source)",
+  }));
+  assert.equal(markdown.includes("<script>"), false);
+  assert.match(markdown, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  const source = /<a[^>]*href="https:\/\/example\.edu\/source"[^>]*>/.exec(markdown)?.[0] ?? "";
+  assert.match(source, /target="_blank"/);
+  assert.match(source, /rel="noreferrer"/);
+  assert.match(source, /\btap-target\b/);
+
+  const damaged = renderToStaticMarkup(createElement(DocumentPanel, {
+    markdown: null,
+    verified: false,
+    emptyTitle: "빈 문서",
+    emptyDescription: "빈 설명",
+  }));
+  assert.match(damaged, /체크섬 검증에 실패했습니다/);
+  const recovery = /<a[^>]*href="\/status"[^>]*>상태 화면에서 복구 방법 확인하기<\/a>/.exec(damaged)?.[0] ?? "";
+  assert.match(recovery, /\btap-target\b/);
+  assert.match(recovery, /\binline-flex\b/);
+  assert.match(recovery, /\bitems-center\b/);
+
+  const unavailable = renderToStaticMarkup(createElement(DocumentPanel, {
+    markdown: null,
+    verified: true,
+    unavailable: true,
+    emptyTitle: "빈 문서",
+    emptyDescription: "빈 설명",
+  }));
+  assert.match(unavailable, /학습 문서 상태를 확인할 수 없습니다/);
+  assert.equal(unavailable.includes("빈 문서"), false);
 });
 
 test("UI missing page gives a Korean recovery path", async () => {
@@ -1910,7 +1968,7 @@ test("UI status explains healthy and recovery-needed states with all counts", as
   }
 });
 
-test("UI detail renders safe recovery guidance for checksum damage", async () => {
+test("UI course workspace preserves structured facts when Markdown is damaged", async () => {
   const { default: CoursePage } = await import(
     "../src/app/courses/[id]/page.tsx"
   );
@@ -1930,12 +1988,52 @@ test("UI detail renders safe recovery guidance for checksum damage", async () =>
 
   try {
     const html = renderToStaticMarkup(
-      await CoursePage({ params: Promise.resolve({ id: created.course.id }) }),
+      await CoursePage({
+        params: Promise.resolve({ id: created.course.id }),
+        searchParams: Promise.resolve({ tab: "plan" }),
+      }),
     );
-    assert.match(html, /과정 데이터를 확인할 수 없습니다/);
-    assert.match(html, /href="\/status">상태에서 복구 방법 확인하기<\/a>/);
+    assert.match(html, /일부 학습 문서를 확인할 수 없습니다/);
+    assert.match(html, /손상된 과정/);
+    assert.match(html, /초안/);
+    assert.match(html, /아직 승인된 30일 계획이 없습니다/);
+    const recovery = /<a[^>]*href="\/status"[^>]*>상태 화면에서 복구 방법 확인하기<\/a>/.exec(html)?.[0] ?? "";
+    assert.match(recovery, /\btap-target\b/);
     assert.equal(html.includes(dataRoot), false);
-    assert.equal(html.includes("손상된 과정"), false);
+    assert.equal(html.includes("private"), false);
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("UI course workspace suppresses prose instead of calling an invalid state empty", async () => {
+  const { default: CoursePage } = await import(
+    "../src/app/courses/[id]/page.tsx"
+  );
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const created = createCourse(db, dataRoot, {
+    requestId: "90000000-0000-4000-8000-000000000026",
+    title: "상태 불일치 과정",
+    goal: "문서 상태를 빈 상태와 구분한다.",
+  });
+  db.prepare("UPDATE courses SET journal_markdown_path = ? WHERE id = ?").run(
+    `courses/${created.course.id}/journal.md`,
+    created.course.id,
+  );
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const html = renderToStaticMarkup(await CoursePage({
+      params: Promise.resolve({ id: created.course.id }),
+      searchParams: Promise.resolve({ tab: "overview" }),
+    }));
+    assert.match(html, /저장된 학습 상태가 일치하지 않습니다/);
+    assert.match(html, /학습 문서 상태를 확인할 수 없습니다/);
+    assert.equal(html.includes("과정 문서가 비어 있습니다"), false);
+    assert.match(html, /상태 불일치 과정/);
   } finally {
     db.close();
     clearTestRuntime();

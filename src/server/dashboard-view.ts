@@ -281,3 +281,27 @@ export function coursesEmptyState(
     actionLabel: "필터 해제",
   };
 }
+
+export type DocumentState = {
+  kind: "damaged" | "empty";
+  title: string;
+  description: string;
+};
+
+export function documentState(markdown: string | null, verified: boolean): DocumentState | null {
+  if (!verified) {
+    return {
+      kind: "damaged",
+      title: "저장된 학습 문서를 확인할 수 없습니다",
+      description: "체크섬 검증에 실패했습니다. 원문을 덮어쓰지 않았으며 복구 전에는 내용을 표시하지 않습니다.",
+    };
+  }
+  if (markdown === null || markdown.trim() === "") {
+    return {
+      kind: "empty",
+      title: "아직 저장된 내용이 없습니다",
+      description: "Codex에서 $just-study로 학습을 진행하면 여기에 검증된 기록이 표시됩니다.",
+    };
+  }
+  return null;
+}

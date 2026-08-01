@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -13,6 +13,7 @@ import {
   courseCardModel,
   courseProgress,
   coursesEmptyState,
+  documentState,
   filterCourses,
   normalizeCourseFilter,
   normalizeTab,
@@ -29,11 +30,13 @@ import {
   completeDay,
   gradeQuiz,
   getCourseHistory,
+  getLearningSnapshot,
   recordDailyResearch,
   saveLearningCheckpoint,
   startQuiz,
 } from "../src/server/learning.ts";
 import { renderApprovedCourseMarkdown } from "../src/server/learning-markdown.ts";
+import { StorageError } from "../src/server/storage.ts";
 import {
   applyTheme,
   DEFAULT_THEME,
@@ -358,6 +361,43 @@ test("course history keeps returning history after a course completes", () => {
       history.quizAttempts.map(({ dayNumber }) => dayNumber),
       Array.from({ length: 30 }, (_, index) => index + 1),
     );
+  });
+});
+
+test("document state separates missing, damaged, and readable prose", () => {
+  assert.deepEqual(documentState(null, false), {
+    kind: "damaged",
+    title: "저장된 학습 문서를 확인할 수 없습니다",
+    description: "체크섬 검증에 실패했습니다. 원문을 덮어쓰지 않았으며 복구 전에는 내용을 표시하지 않습니다.",
+  });
+  assert.deepEqual(documentState(null, true), {
+    kind: "empty",
+    title: "아직 저장된 내용이 없습니다",
+    description: "Codex에서 $just-study로 학습을 진행하면 여기에 검증된 기록이 표시됩니다.",
+  });
+  assert.equal(documentState("# 제목", true), null);
+  assert.equal(documentState("   ", true)!.kind, "empty");
+});
+
+test("a damaged document breaks only the prose read, never the structured history", () => {
+  withRuntime((db, dataRoot) => {
+    const approved = approve(db, dataRoot, "손상 검증", [
+      "https://corrupt.example.edu/a",
+      "https://corrupt.example.org/b",
+    ]);
+    const courseId = approved.course.id;
+    const journalPath = join(dataRoot, "courses", courseId, "journal.md");
+    const original = readFileSync(journalPath, "utf8");
+
+    writeFileSync(journalPath, `${original}\n손상된 추가 문장\n`, "utf8");
+
+    assert.throws(() => getLearningSnapshot(db, dataRoot, courseId), StorageError);
+
+    const history = getCourseHistory(db, courseId)!;
+    assert.equal(history.days.length, 30);
+    assert.equal(history.researchRuns.length, 1);
+    assert.equal(history.course.status, "active");
+    assert.equal(readFileSync(journalPath, "utf8").startsWith(original), true);
   });
 });
 
