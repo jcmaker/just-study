@@ -72,7 +72,10 @@ import {
   draftErrorMessage as draftErrorMessageForTest,
   reflectionErrorMessage as reflectionErrorMessageForTest,
 } from "../src/app/error-messages.ts";
-import { updateCourseDraftAction } from "../src/app/actions.ts";
+import {
+  submitReflectionAction,
+  updateCourseDraftAction,
+} from "../src/app/actions.ts";
 
 registerHooks({
   load(url, context, nextLoad) {
@@ -1613,4 +1616,132 @@ test("reflection form constrains fields and preserves submitted answers across o
     pendingRendered,
     /<button[^>]*type="submit"[^>]*disabled=""[^>]*>제출 중…<\/button>/,
   );
+});
+
+function reachReflection(db: DatabaseHandle, dataRoot: string, title: string, prefix: string) {
+  const approved = approve(db, dataRoot, title, [
+    `https://${prefix}.example.edu/a`,
+    `https://${prefix}.example.org/b`,
+  ]);
+  const courseId = approved.course.id;
+  let state = recordDailyResearch(db, dataRoot, {
+    courseId,
+    expectedRevision: approved.course.revision,
+    research: research(prefix, [
+      `https://${prefix}-day.example.edu/a`,
+      `https://${prefix}-day.example.org/b`,
+    ]),
+  });
+  state = saveLearningCheckpoint(db, dataRoot, {
+    courseId,
+    expectedRevision: state.course.revision,
+    lesson,
+    understoodConcepts: [{ key: `${prefix}-known`, label: `${prefix} 이해 개념` }],
+    remediationConcepts: [],
+  });
+  const list = questions(prefix);
+  state = startQuiz(db, dataRoot, { courseId, expectedRevision: state.course.revision, questions: list });
+  state = gradeQuiz(db, dataRoot, {
+    courseId,
+    expectedRevision: state.course.revision,
+    attemptId: state.quizAttempts.at(-1)!.id,
+    grades: grades(list, null),
+  });
+  return { courseId, state };
+}
+
+test("a reflection action rejects missing or blank revisions without mutating the course", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    __justStudyRuntime?: { dataRoot: string; db: DatabaseHandle | null };
+  };
+  const previousRuntime = runtimeGlobal.__justStudyRuntime;
+  runtimeGlobal.__justStudyRuntime = { dataRoot, db };
+
+  try {
+    const { courseId, state } = reachReflection(db, dataRoot, "회고 리비전", "reflect-revision");
+    assert.equal(state.course.currentStage, "reflection");
+    const before = getCourseHistory(db, courseId)!;
+
+    for (const rawRevision of [null, "", "   ", "정수아님"] as const) {
+      const formData = new FormData();
+      formData.set("courseId", courseId);
+      formData.set("learned", "배운 점");
+      formData.set("confusing", "헷갈린 점");
+      formData.set("feeling", "느낀 점");
+      if (rawRevision !== null) formData.set("expectedRevision", rawRevision);
+
+      const result = await submitReflectionAction({} as never, formData);
+      const label = JSON.stringify(rawRevision);
+
+      assert.equal(result.status, "error", label);
+      assert.equal(result.learned, "배운 점", label);
+      assert.equal(result.confusing, "헷갈린 점", label);
+      assert.equal(result.feeling, "느낀 점", label);
+
+      const unchanged = getCourseHistory(db, courseId)!;
+      assert.equal(unchanged.course.revision, before.course.revision, label);
+      assert.equal(unchanged.course.currentStage, "reflection", label);
+      assert.equal(unchanged.days.filter(({ completedAt }) => completedAt !== null).length, 0, label);
+    }
+  } finally {
+    db.close();
+    if (previousRuntime === undefined) delete runtimeGlobal.__justStudyRuntime;
+    else runtimeGlobal.__justStudyRuntime = previousRuntime;
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("the today tab mounts the reflection form only during the reflection stage", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    __justStudyRuntime?: { dataRoot: string; db: DatabaseHandle | null };
+  };
+  const previousRuntime = runtimeGlobal.__justStudyRuntime;
+  runtimeGlobal.__justStudyRuntime = { dataRoot, db };
+
+  try {
+    const { default: CoursePage } = await import("../src/app/courses/[id]/page.tsx");
+    const renderToday = async (id: string) =>
+      renderToStaticMarkup(
+        await CoursePage({
+          params: Promise.resolve({ id }),
+          searchParams: Promise.resolve({ tab: "today" }),
+        }),
+      );
+
+    const draft = createCourse(db, dataRoot, {
+      requestId: crypto.randomUUID(),
+      title: "초안 과정",
+      goal: "초안에서는 회고를 제출할 수 없다.",
+    }).course;
+    const draftToday = await renderToday(draft.id);
+    assert.doesNotMatch(draftToday, /오늘의 회고/);
+    assert.doesNotMatch(draftToday, /id="reflection-learned"/);
+
+    const lectureCourse = approve(db, dataRoot, "강의 단계", [
+      "https://lecture.example.edu/a",
+      "https://lecture.example.org/b",
+    ]).course;
+    assert.equal(lectureCourse.currentStage, "lecture");
+    const lectureToday = await renderToday(lectureCourse.id);
+    assert.doesNotMatch(lectureToday, /오늘의 회고/);
+    assert.doesNotMatch(lectureToday, /id="reflection-learned"/);
+
+    const { courseId } = reachReflection(db, dataRoot, "회고 단계", "reflect-stage");
+    const reflectionToday = await renderToday(courseId);
+    assert.match(reflectionToday, /오늘의 회고/);
+    assert.match(reflectionToday, /id="reflection-learned"/);
+    assert.match(reflectionToday, /id="reflection-confusing"/);
+    assert.match(reflectionToday, /id="reflection-feeling"/);
+    assert.match(reflectionToday, /회고 제출하고 다음 Day로/);
+    assert.match(reflectionToday, new RegExp(`name="expectedRevision" value="${getCourseHistory(db, courseId)!.course.revision}"`));
+  } finally {
+    db.close();
+    if (previousRuntime === undefined) delete runtimeGlobal.__justStudyRuntime;
+    else runtimeGlobal.__justStudyRuntime = previousRuntime;
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
 });
