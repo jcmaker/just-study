@@ -34,6 +34,13 @@ Call `list_courses` after health.
 7. Build exactly 30 ordered Days. Give each Day one observable objective.
 8. Show the research summary, selected sources, limitations, and all 30 objectives. Call `approve_outline` only after the user explicitly approves what was shown.
 
+Before `approve_outline` or `record_daily_research`, preflight every nested research identifier:
+
+- Generate a fresh RFC-compatible UUID for every `sources[].id` and `claims[].id`.
+- Set each `claims[].evidence[].sourceId` to exactly reuse one UUID from `sources[].id`.
+- Never use human-readable labels as an `id`; keep them in `title`, `independenceKey`, or claim text.
+- If this preflight fails, correct the payload before the write.
+
 ## Resume by stage
 
 ### Lecture

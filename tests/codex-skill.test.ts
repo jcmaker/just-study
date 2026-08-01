@@ -62,6 +62,19 @@ test("distinguishes new URL provenance from approved saved-source reuse", () => 
   assert.match(skill, /does not require a new `openPage` event/);
 });
 
+test("preflights nested research UUID identifiers before writes", () => {
+  for (const phrase of [
+    "Before `approve_outline` or `record_daily_research`, preflight",
+    "Generate a fresh RFC-compatible UUID",
+    "`sources[].id` and `claims[].id`",
+    "`claims[].evidence[].sourceId`",
+    "exactly reuse one UUID from `sources[].id`",
+    "Never use human-readable labels as an `id`",
+    "`title`, `independenceKey`, or claim text",
+    "before the write",
+  ]) assert.ok(skill.includes(phrase));
+});
+
 test("keeps project MCP config aligned with the skill dependency", () => {
   assert.match(config, /\[mcp_servers\.just-study\]/);
   assert.match(config, /url = "http:\/\/127\.0\.0\.1:3000\/mcp"/);
