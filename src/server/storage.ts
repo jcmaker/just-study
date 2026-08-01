@@ -123,6 +123,15 @@ function ensureDirectory(root: string, directory: string): void {
   assertNoSymlinks(root, directory);
 }
 
+function assertWritableDirectory(root: string, directory: string): void {
+  assertNoSymlinks(root, directory);
+  const stat = lstatIfExists(directory);
+  if (!stat) return;
+  if (!stat.isDirectory()) storageError("Storage path is not a directory");
+  if ((stat.mode & 0o222) === 0) storageError("Storage directory is not writable");
+  accessSync(directory, constants.W_OK | constants.X_OK);
+}
+
 function storagePaths(dataRoot: string): { root: string; coursesRoot: string; temporaryRoot: string } {
   const root = resolve(dataRoot);
   ensureDirectory(root, root);
@@ -498,8 +507,9 @@ export function probeStorageWritable(dataRoot: string): void {
     if (rootStat && !rootStat.isDirectory()) storageError("Storage root is not a directory");
 
     if (rootStat) {
-      assertNoSymlinks(root, temporaryRoot);
-      accessSync(root, constants.R_OK | constants.W_OK | constants.X_OK);
+      assertWritableDirectory(root, root);
+      assertWritableDirectory(root, temporaryRoot);
+      assertWritableDirectory(root, resolveInsideDataRoot(root, "courses"));
     } else {
       accessSync(dirname(root), constants.W_OK | constants.X_OK);
     }

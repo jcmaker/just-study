@@ -9,7 +9,7 @@ Use the local `just-study` MCP as the only source of persisted course state. Per
 
 ## Invariants
 
-1. Call `health` first. If the call itself is unavailable, tell the user to run `npm run dev` in the repository and stop. If `health` returns but reports `ok: false`, surface its Korean `message` to the user — it describes a schema mismatch, storage inconsistency, or corrupt, orphaned, or temporary entries — and stop.
+1. Call `health` first. If the call itself is unavailable, tell the user to run `npm run dev` in the repository and stop. If it reports `state: "uninitialized"`, explain that the first approved `create_course` write will initialize this computer's empty local store, then continue the new-course flow. If it reports `ok: false`, surface its Korean `message` to the user — it describes a schema mismatch, storage inconsistency, or corrupt, orphaned, or temporary entries — and stop.
 2. Use the latest saved `revision` for every write except `create_course`.
 3. On `REVISION_CONFLICT`, read state again and explain the conflict. Do not replay the write automatically.
 4. On `STORAGE_CORRUPT`, stop. Do not overwrite or attempt repair through MCP.

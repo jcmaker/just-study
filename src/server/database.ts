@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import Database from "better-sqlite3";
 
@@ -260,5 +261,16 @@ export function openDatabase(dataRoot: string): DatabaseHandle {
 export function openDatabaseReadOnly(dataRoot: string): DatabaseHandle {
   const databasePath = join(resolve(dataRoot), "just-study.sqlite");
   if (!existsSync(databasePath)) throw new Error("Database does not exist");
-  return new Database(databasePath, { readonly: true, fileMustExist: true });
+  const walPath = `${databasePath}-wal`;
+  const shmPath = `${databasePath}-shm`;
+
+  if (existsSync(walPath) && !existsSync(shmPath)) {
+    throw new Error("WAL shared-memory file is unavailable");
+  }
+
+  const source = existsSync(walPath)
+    ? databasePath
+    : `file:${databasePath}?immutable=1`;
+  // DatabaseSync supports SQLite URIs; immutable clean-WAL reads avoid creating sidecars.
+  return new DatabaseSync(source, { readOnly: true }) as unknown as DatabaseHandle;
 }

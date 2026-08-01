@@ -12,7 +12,7 @@ import {
   UUID_PATTERN,
   type Course,
 } from "./courses.ts";
-import { getHealth } from "./health.ts";
+import { getHealth, isUninitializedDataRoot } from "./health.ts";
 import {
   approveOutline,
   completeDay,
@@ -350,7 +350,8 @@ export function createJustStudyMcpServer(): McpServer {
         ok: z.literal(true),
         data: z.object({
           ok: z.boolean(),
-          database: z.enum(["ok", "error"]),
+          state: z.enum(["ready", "uninitialized", "recovery_required"]),
+          database: z.enum(["ok", "uninitialized", "error"]),
           storage: z.enum(["ok", "error"]),
           schemaVersion: z.number().int().nullable(),
           expectedSchemaVersion: z.number().int(),
@@ -390,6 +391,9 @@ export function createJustStudyMcpServer(): McpServer {
         () => {
           const runtime = getReadOnlyRuntime();
           try {
+            if (!runtime.db && isUninitializedDataRoot(runtime.dataRoot)) {
+              return { courses: [] };
+            }
             const db = requireDatabase(runtime);
             return {
               courses: listCourses(db).map((course) => {

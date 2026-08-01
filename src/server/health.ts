@@ -1,4 +1,6 @@
 import type { DatabaseHandle } from "./database.ts";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { SCHEMA_VERSION } from "./database.ts";
 import {
   listCourseDirectoryIds,
@@ -9,7 +11,8 @@ import {
 
 export type HealthReport = {
   ok: boolean;
-  database: "ok" | "error";
+  state: "ready" | "uninitialized" | "recovery_required";
+  database: "ok" | "uninitialized" | "error";
   storage: "ok" | "error";
   schemaVersion: number | null;
   expectedSchemaVersion: number;
@@ -19,6 +22,13 @@ export type HealthReport = {
   temporaryEntries: string[];
   message: string;
 };
+
+export function isUninitializedDataRoot(dataRoot: string): boolean {
+  const root = resolve(dataRoot);
+  return !existsSync(join(root, "just-study.sqlite")) &&
+    !existsSync(join(root, "courses")) &&
+    !existsSync(join(root, "tmp"));
+}
 
 type StoredCourse = {
   id: string;
@@ -48,7 +58,7 @@ export function getHealth(
   if (db) {
     try {
       db.prepare("SELECT 1").get();
-      schemaVersion = db.pragma("user_version", { simple: true }) as number;
+      schemaVersion = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
       courses = db
         .prepare(
           `SELECT
@@ -162,13 +172,19 @@ export function getHealth(
     corruptCourseIds.length === 0 &&
     temporaryEntries.length === 0;
   const schemaOk = schemaVersion === SCHEMA_VERSION;
-  const ok =
-    database === "ok" &&
-    storage === "ok" &&
-    schemaOk &&
-    consistent;
+  if (database === "error" && storage === "ok" && isUninitializedDataRoot(dataRoot)) {
+    database = "uninitialized";
+  }
+  const state = database === "uninitialized"
+    ? "uninitialized"
+    : database === "ok" && storage === "ok" && schemaOk && consistent
+      ? "ready"
+      : "recovery_required";
+  const ok = state !== "recovery_required";
   const message =
-    database === "error" && storage === "error"
+    state === "uninitialized"
+      ? "새 학습 저장소를 만들 준비가 되었습니다. 첫 과정을 만들면 이 컴퓨터에 저장됩니다."
+      : database === "error" && storage === "error"
       ? "데이터 저장소 권한과 데이터베이스 파일, 스키마 및 권한을 확인해 주세요."
       : storage === "error"
         ? "데이터 저장소를 사용할 수 없습니다. 데이터 디렉터리 권한을 확인해 주세요."
@@ -180,6 +196,7 @@ export function getHealth(
 
   return {
     ok,
+    state,
     database,
     storage,
     schemaVersion,

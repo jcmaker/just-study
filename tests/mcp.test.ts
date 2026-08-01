@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -247,7 +247,7 @@ test("negotiates Streamable HTTP and lists health", { concurrency: false }, asyn
   }
 });
 
-test("health has no side effects for a first call without a data store", { concurrency: false }, async () => {
+test("health reports a new data root as safe but uninitialized without creating it", { concurrency: false }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "just-study-mcp-empty-"));
   const dataRoot = join(parent, "data");
   const previousDataRoot = process.env.JUST_STUDY_DATA_DIR;
@@ -256,11 +256,12 @@ test("health has no side effects for a first call without a data store", { concu
 
   try {
     await withMcpClient(async (client) => {
-      const health = structured<{ ok: true; data: { ok: boolean; database: string; storage: string } }>(
+      const health = structured<{ ok: true; data: { ok: boolean; state: string; database: string; storage: string } }>(
         await client.callTool({ name: "health", arguments: {} }),
       );
-      assert.equal(health.data.ok, false);
-      assert.equal(health.data.database, "error");
+      assert.equal(health.data.ok, true);
+      assert.equal(health.data.state, "uninitialized");
+      assert.equal(health.data.database, "uninitialized");
       assert.equal(health.data.storage, "ok");
     });
     assert.equal(existsSync(dataRoot), false);
@@ -274,9 +275,31 @@ test("health has no side effects for a first call without a data store", { concu
   }
 });
 
-test("other read-only tools do not initialize a missing data store", { concurrency: false }, async () => {
+test("list_courses exposes an uninitialized store as empty without initializing it", { concurrency: false }, async () => {
+  const parent = mkdtempSync(join(tmpdir(), "just-study-mcp-empty-list-"));
+  const dataRoot = join(parent, "data");
+  const previousDataRoot = process.env.JUST_STUDY_DATA_DIR;
+  clearTestRuntime();
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+
+  try {
+    await withMcpClient(async (client) => {
+      const listed = structured<{ ok: true; data: { courses: unknown[] } }>(
+        await client.callTool({ name: "list_courses", arguments: {} }),
+      );
+      assert.deepEqual(listed.data.courses, []);
+    });
+    assert.equal(existsSync(dataRoot), false);
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.JUST_STUDY_DATA_DIR;
+    else process.env.JUST_STUDY_DATA_DIR = previousDataRoot;
+    clearTestRuntime();
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("remaining read-only tools do not initialize a missing data store", { concurrency: false }, async () => {
   for (const [name, arguments_] of [
-    ["list_courses", {}],
     ["get_learning_state", { courseId: crypto.randomUUID() }],
     ["read_learning_document", { courseId: crypto.randomUUID(), document: "course" }],
   ] as const) {
@@ -299,6 +322,115 @@ test("other read-only tools do not initialize a missing data store", { concurren
       clearTestRuntime();
       rmSync(parent, { recursive: true, force: true });
     }
+  }
+});
+
+test("fresh MCP onboarding initializes storage only through create_course", { concurrency: false }, async () => {
+  const parent = mkdtempSync(join(tmpdir(), "just-study-mcp-onboarding-"));
+  const dataRoot = join(parent, "data");
+  const previousDataRoot = process.env.JUST_STUDY_DATA_DIR;
+  clearTestRuntime();
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+
+  try {
+    await withMcpClient(async (client) => {
+      const before = structured<{ ok: true; data: { ok: boolean; state: string } }>(
+        await client.callTool({ name: "health", arguments: {} }),
+      );
+      assert.equal(before.data.ok, true);
+      assert.equal(before.data.state, "uninitialized");
+      assert.deepEqual(structured<{ ok: true; data: { courses: unknown[] } }>(
+        await client.callTool({ name: "list_courses", arguments: {} }),
+      ).data.courses, []);
+      assert.equal(existsSync(dataRoot), false);
+
+      const created = structured<{ ok: true; data: { created: boolean; course: { id: string } } }>(
+        await client.callTool({
+          name: "create_course",
+          arguments: {
+            requestId: crypto.randomUUID(),
+            title: "첫 과정",
+            goal: "MCP로 첫 과정을 안전하게 시작한다.",
+          },
+        }),
+      );
+      assert.equal(created.data.created, true);
+      assert.ok(existsSync(dataRoot));
+
+      const after = structured<{ ok: true; data: { ok: boolean; state: string; database: string } }>(
+        await client.callTool({ name: "health", arguments: {} }),
+      );
+      assert.equal(after.data.ok, true);
+      assert.equal(after.data.state, "ready");
+      assert.equal(after.data.database, "ok");
+    });
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.JUST_STUDY_DATA_DIR;
+    else process.env.JUST_STUDY_DATA_DIR = previousDataRoot;
+    (globalThis as TestRuntimeGlobal).__justStudyRuntime?.db?.close();
+    clearTestRuntime();
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("every read-only tool leaves a closed WAL store's files unchanged", { concurrency: false }, async () => {
+  for (const [name, arguments_] of [
+    ["health", {}],
+    ["list_courses", {}],
+    ["get_learning_state", null],
+    ["read_learning_document", null],
+  ] as const) {
+    const dataRoot = makeDataRoot();
+    const previousDataRoot = process.env.JUST_STUDY_DATA_DIR;
+    const db = openDatabase(dataRoot);
+    const course = createCourse(db, dataRoot, {
+      requestId: crypto.randomUUID(),
+      title: `${name} WAL 점검`,
+      goal: "읽기 도구가 파일을 만들지 않는지 확인한다.",
+    }).course;
+    db.close();
+    clearTestRuntime();
+    process.env.JUST_STUDY_DATA_DIR = dataRoot;
+    const argumentsForTool = arguments_ ?? (name === "get_learning_state"
+      ? { courseId: course.id }
+      : { courseId: course.id, document: "course" });
+    const before = readdirSync(dataRoot).sort();
+
+    try {
+      await withMcpClient(async (client) => {
+        const result = await client.callTool({ name, arguments: argumentsForTool });
+        assert.equal(result.isError, undefined, name);
+      });
+      assert.deepEqual(readdirSync(dataRoot).sort(), before, name);
+    } finally {
+      if (previousDataRoot === undefined) delete process.env.JUST_STUDY_DATA_DIR;
+      else process.env.JUST_STUDY_DATA_DIR = previousDataRoot;
+      clearTestRuntime();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("health rejects an existing tmp directory without writable mode bits", { concurrency: false }, async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+  mkdirSync(join(dataRoot, "tmp"));
+  chmodSync(join(dataRoot, "tmp"), 0o555);
+
+  try {
+    await withMcpClient(async (client) => {
+      const health = structured<{ ok: true; data: { ok: boolean; storage: string } }>(
+        await client.callTool({ name: "health", arguments: {} }),
+      );
+      assert.equal(health.data.ok, false);
+      assert.equal(health.data.storage, "error");
+    });
+  } finally {
+    chmodSync(join(dataRoot, "tmp"), 0o700);
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
   }
 });
 

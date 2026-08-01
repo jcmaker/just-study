@@ -936,16 +936,17 @@ test("reports schema and temporary-entry recovery states", () => {
   }
 });
 
-test("reports database startup failure while still checking storage", () => {
+test("reports a fresh data root as uninitialized while still checking storage", () => {
   const dataRoot = makeDataRoot();
 
   try {
     const health = getHealth(null, dataRoot);
-    assert.equal(health.ok, false);
-    assert.equal(health.database, "error");
+    assert.equal(health.ok, true);
+    assert.equal(health.state, "uninitialized");
+    assert.equal(health.database, "uninitialized");
     assert.equal(health.storage, "ok");
     assert.equal(health.schemaVersion, null);
-    assert.match(health.message, /데이터베이스|스키마|권한/);
+    assert.match(health.message, /첫 과정|준비/);
     assert.equal(health.message.includes(dataRoot), false);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
@@ -1095,6 +1096,7 @@ test("health route returns 503 for corrupt Markdown", async () => {
 
 test("health route remains callable when the database is unavailable", async () => {
   const dataRoot = makeDataRoot();
+  writeFileSync(join(dataRoot, "just-study.sqlite"), "not a SQLite database", "utf8");
   setTestRuntime(dataRoot, null);
 
   try {
