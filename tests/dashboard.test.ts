@@ -15,6 +15,7 @@ import {
   filterCourses,
   normalizeCourseFilter,
   normalizeTab,
+  resumeCardModel,
   resumeCourse,
   RESUME_COMMAND,
   STAGE_LABELS,
@@ -450,6 +451,41 @@ test("resume picks the most recently updated active course and falls back determ
   const done = summary({ id: "e", status: "completed", currentStage: null, currentDayNumber: null });
   assert.equal(resumeCourse([done]), null);
   assert.equal(resumeCourse([]), null);
+});
+
+test("resume card describes exactly one next action for every data state", () => {
+  const empty = resumeCardModel([]);
+  assert.equal(empty.kind, "empty");
+  assert.equal(empty.title, "첫 학습 과정을 만들어 보세요");
+  assert.equal(empty.command, null);
+
+  const onlyCompleted = resumeCardModel([summary({ status: "completed", currentStage: null, currentDayNumber: null })]);
+  assert.equal(onlyCompleted.kind, "completed");
+  assert.equal(onlyCompleted.command, null);
+
+  const draft = resumeCardModel([summary({
+    id: "22222222-2222-4222-8222-222222222222",
+    status: "draft",
+    currentStage: null,
+    currentDayNumber: null,
+    currentDayObjective: null,
+    approvedDayCount: 0,
+  })]);
+  assert.equal(draft.kind, "draft");
+  assert.equal(draft.command, "$just-study 계속");
+  assert.equal(draft.dayLabel, null);
+  assert.equal(draft.stageLabel, null);
+  assert.equal(draft.objective, null);
+  assert.equal(draft.href, "/courses/22222222-2222-4222-8222-222222222222?tab=overview");
+
+  const active = resumeCardModel([summary({ currentStage: "quiz", currentDayNumber: 4, currentDayObjective: "Day 4 목표" })]);
+  assert.equal(active.kind, "active");
+  assert.equal(active.dayLabel, "Day 4 / 30");
+  assert.equal(active.stageLabel, "퀴즈");
+  assert.equal(active.objective, "Day 4 목표");
+  assert.equal(active.command, "$just-study 계속");
+  assert.deepEqual(active.progress, { completed: 2, approved: 30, percent: 7 });
+  assert.equal(active.href, "/courses/11111111-1111-4111-8111-111111111111?tab=today");
 });
 
 test("attention uses the fixed priority, one item per course, at most three", () => {

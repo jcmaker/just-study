@@ -130,6 +130,84 @@ export function resumeCourse(courses: readonly DashboardCourseSummary[]): Dashbo
   return drafts[0] ?? null;
 }
 
+export type ResumeCardModel = {
+  kind: "empty" | "completed" | "draft" | "active";
+  title: string;
+  description: string;
+  courseId: string | null;
+  courseTitle: string | null;
+  dayLabel: string | null;
+  stageLabel: string | null;
+  objective: string | null;
+  progress: CourseProgress | null;
+  command: string | null;
+  href: string | null;
+  actionLabel: string | null;
+};
+
+export function resumeCardModel(courses: readonly DashboardCourseSummary[]): ResumeCardModel {
+  const empty: ResumeCardModel = {
+    kind: "empty",
+    title: "첫 학습 과정을 만들어 보세요",
+    description: "과정 이름과 30일 뒤 목표를 저장하면 Codex에서 $just-study로 리서치와 30일 목차를 만들 수 있습니다.",
+    courseId: null,
+    courseTitle: null,
+    dayLabel: null,
+    stageLabel: null,
+    objective: null,
+    progress: null,
+    command: null,
+    href: null,
+    actionLabel: null,
+  };
+  if (courses.length === 0) return empty;
+
+  const target = resumeCourse(courses);
+  if (target === null) {
+    return {
+      ...empty,
+      kind: "completed",
+      title: "모든 과정을 완료했습니다",
+      description: "새 주제를 정해 다음 30일 과정을 시작할 수 있습니다.",
+      href: "/courses",
+      actionLabel: "과정 목록 보기",
+    };
+  }
+
+  const card = courseCardModel(target);
+  if (target.status === "draft") {
+    return {
+      kind: "draft",
+      title: target.title,
+      description: "30일 계획 승인이 필요합니다. Codex에서 리서치와 목차를 완성해 주세요.",
+      courseId: target.id,
+      courseTitle: target.title,
+      dayLabel: null,
+      stageLabel: null,
+      objective: null,
+      progress: null,
+      command: RESUME_COMMAND,
+      href: `/courses/${target.id}?tab=overview`,
+      actionLabel: "과정 개요 열기",
+    };
+  }
+
+  return {
+    kind: "active",
+    title: target.title,
+    description: "저장된 Day와 단계에서 이어집니다.",
+    courseId: target.id,
+    courseTitle: target.title,
+    dayLabel: card.dayLabel,
+    stageLabel: card.stageLabel,
+    objective: target.currentDayObjective,
+    progress: card.progress,
+    command: RESUME_COMMAND,
+    href: `/courses/${target.id}?tab=today`,
+    actionLabel: "오늘 학습 열기",
+  };
+}
+
 type AttentionRule = { rank: number; message: string; tab: CourseTab };
 
 function attentionRule(course: DashboardCourseSummary): AttentionRule | null {

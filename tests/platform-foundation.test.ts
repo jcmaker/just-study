@@ -1458,6 +1458,7 @@ test("new standalone dashboard links expose 44px keyboard and pointer targets", 
     assert.match(className, /\bitems-center\b/, `${label} link needs vertical alignment`);
   };
   const { default: RootLayout } = await import("../src/app/layout.tsx");
+  const { CourseCard } = await import("../src/app/course-card.tsx");
   const { default: NotFound } = await import("../src/app/not-found.tsx");
   const { default: SettingsPage } = await import("../src/app/settings/page.tsx");
   const shell = renderToStaticMarkup(createElement(RootLayout, null, createElement("p", null, "본문")));
@@ -1482,6 +1483,26 @@ test("new standalone dashboard links expose 44px keyboard and pointer targets", 
   const notFound = renderToStaticMarkup(createElement(NotFound));
   const homeClass = /<a class="([^"]*)" href="\/">과정 목록으로 돌아가기<\/a>/.exec(notFound)?.[1];
   assertTargetClasses(homeClass, "과정 목록으로 돌아가기");
+
+  const courseCard = renderToStaticMarkup(createElement(CourseCard, {
+    card: {
+      id: "90000000-0000-4000-8000-000000000009",
+      title: "카드 과정",
+      goal: "과정 카드의 진입점을 확인한다.",
+      status: "active",
+      statusLabel: "진행 중",
+      dayLabel: null,
+      stageLabel: null,
+      progress: null,
+      note: null,
+      accentIndex: 0,
+      updatedAt: "2026-08-01T00:00:00.000Z",
+      href: "/courses/90000000-0000-4000-8000-000000000009",
+    },
+  }));
+  const courseLink = /<a[^>]*href="\/courses\/90000000-0000-4000-8000-000000000009"[^>]*>카드 과정<\/a>/.exec(courseCard)?.[0];
+  const courseClass = /class="([^"]*)"/.exec(courseLink ?? "")?.[1];
+  assertTargetClasses(courseClass, "과정 카드 제목");
 });
 
 function makeCourseFormData(
