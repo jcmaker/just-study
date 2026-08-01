@@ -252,3 +252,32 @@ export function filterCourses(
 ): DashboardCourseSummary[] {
   return filter === "all" ? [...courses] : courses.filter(({ status }) => status === filter);
 }
+
+export type CoursesEmptyState = {
+  kind: "no-courses" | "no-matches";
+  title: string;
+  description: string;
+  actionLabel: string;
+};
+
+export function coursesEmptyState(
+  totalCount: number,
+  visibleCount: number,
+  filter: CourseFilter,
+): CoursesEmptyState | null {
+  if (visibleCount > 0) return null;
+  if (totalCount === 0) {
+    return {
+      kind: "no-courses",
+      title: "아직 저장된 과정이 없습니다",
+      description: "과정 이름과 30일 뒤 목표를 저장한 다음 Codex에서 $just-study를 호출해 리서치와 30일 목차를 만드세요.",
+      actionLabel: "새 과정 만들기",
+    };
+  }
+  return {
+    kind: "no-matches",
+    title: `${COURSE_FILTER_LABELS[filter]} 상태의 과정이 없습니다`,
+    description: "다른 상태의 과정은 남아 있습니다. 필터를 해제하면 전체 과정을 볼 수 있습니다.",
+    actionLabel: "필터 해제",
+  };
+}

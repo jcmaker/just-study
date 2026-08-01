@@ -1541,6 +1541,44 @@ test("UI form renders labels, limits, alert, and pending state", async () => {
   assert.match(html, /생성 중…/);
 });
 
+test("new-course form gives its title field initial focus", async () => {
+  const { CourseFormView } = await import("../src/app/course-form.tsx");
+  const html = renderToStaticMarkup(
+    createElement(CourseFormView, {
+      action: "/",
+      autoFocus: true,
+      pending: false,
+      requestId: "90000000-0000-4000-8000-000000000020",
+      state: { error: null },
+    }),
+  );
+
+  assert.match(html, /<input[^>]*autofocus=""[^>]*name="title"/);
+});
+
+test("new-course panels use labelled native dialogs with independent openers", async () => {
+  const { NewCoursePanel } = await import("../src/app/new-course-panel.tsx");
+  const html = renderToStaticMarkup(
+    createElement("div", null,
+      createElement(NewCoursePanel, { requestId: "90000000-0000-4000-8000-000000000021" }),
+      createElement(NewCoursePanel, { requestId: "90000000-0000-4000-8000-000000000022" }),
+    ),
+  );
+  const dialogLabels = [...html.matchAll(/<dialog[^>]*aria-labelledby="([^"]+)"/g)].map((match) => match[1]);
+  const headingIds = [...html.matchAll(/<h2 id="([^"]+)"[^>]*>새 과정<\/h2>/g)].map((match) => match[1]);
+  const openerClasses = [...html.matchAll(/<button[^>]*class="([^"]*)"[^>]*>새 과정<\/button>/g)].map((match) => match[1]);
+
+  assert.equal(dialogLabels.length, 2);
+  assert.deepEqual(dialogLabels, headingIds);
+  assert.notEqual(dialogLabels[0], dialogLabels[1]);
+  assert.equal(openerClasses.length, 2);
+  for (const className of openerClasses) {
+    assert.match(className ?? "", /\btap-target\b/);
+    assert.match(className ?? "", /\binline-flex\b/);
+    assert.match(className ?? "", /\bitems-center\b/);
+  }
+});
+
 test("UI action keeps title and goal validation field-specific", async () => {
   const { createCourseAction } = await import("../src/app/actions.ts");
   const dataRoot = makeDataRoot();
@@ -1652,6 +1690,63 @@ test("UI root renders an empty state and then a saved course link", async () => 
     assert.match(listHtml, new RegExp(`href="/courses/${created.course.id}"`));
   } finally {
     db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("courses UI normalizes array filters and renders only stored status matches", async () => {
+  const { default: CoursesPage } = await import("../src/app/courses/page.tsx");
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const created = createCourse(db, dataRoot, {
+    requestId: "90000000-0000-4000-8000-000000000023",
+    title: "초안만 있는 과정",
+    goal: "저장된 초안 상태만 보여 준다.",
+  });
+  setTestRuntime(dataRoot, db);
+
+  try {
+    const filtered = renderToStaticMarkup(await CoursesPage({
+      searchParams: Promise.resolve({ filter: "active" }),
+    }));
+    assert.match(filtered, /진행 중 상태의 과정이 없습니다/);
+    assert.equal(filtered.includes("초안만 있는 과정"), false);
+    assert.match(filtered, /href="\/courses"[^>]*>필터 해제<\/a>/);
+
+    const normalized = renderToStaticMarkup(await CoursesPage({
+      searchParams: Promise.resolve({ filter: ["active"] }),
+    }));
+    assert.match(normalized, /초안만 있는 과정/);
+    assert.match(normalized, new RegExp(`href="/courses/${created.course.id}"`));
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("courses UI keeps unavailable and query failures out of the empty state", async () => {
+  const { default: CoursesPage } = await import("../src/app/courses/page.tsx");
+  const dataRoot = makeDataRoot();
+
+  try {
+    setTestRuntime(dataRoot, null);
+    const unavailable = renderToStaticMarkup(await CoursesPage({ searchParams: Promise.resolve({}) }));
+    assert.match(unavailable, /데이터베이스를 사용할 수 없습니다/);
+    assert.equal(unavailable.includes("아직 저장된 과정이 없습니다"), false);
+    const recoveryClass = /<a class="([^"]*)" href="\/status">상태 화면에서 복구 방법 확인하기<\/a>/.exec(unavailable)?.[1];
+    assert.match(recoveryClass ?? "", /\btap-target\b/);
+    assert.match(recoveryClass ?? "", /\binline-flex\b/);
+    assert.match(recoveryClass ?? "", /\bitems-center\b/);
+
+    const db = openDatabase(dataRoot);
+    db.close();
+    setTestRuntime(dataRoot, db);
+    const failedQuery = renderToStaticMarkup(await CoursesPage({ searchParams: Promise.resolve({}) }));
+    assert.match(failedQuery, /데이터베이스를 읽는 중 문제가 발생했습니다/);
+    assert.equal(failedQuery.includes("아직 저장된 과정이 없습니다"), false);
+  } finally {
     clearTestRuntime();
     rmSync(dataRoot, { recursive: true, force: true });
   }

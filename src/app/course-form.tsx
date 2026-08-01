@@ -11,6 +11,7 @@ const initialState: CreateCourseState = { error: null };
 
 type CourseFormViewProps = {
   action: string | ((formData: FormData) => void);
+  autoFocus?: boolean;
   pending: boolean;
   requestId: string;
   state: CreateCourseState;
@@ -18,6 +19,7 @@ type CourseFormViewProps = {
 
 export function CourseFormView({
   action,
+  autoFocus = false,
   pending,
   requestId,
   state,
@@ -27,6 +29,7 @@ export function CourseFormView({
       <input type="hidden" name="requestId" value={requestId} />
       <label htmlFor="course-title">과정 이름</label>
       <input
+        autoFocus={autoFocus}
         id="course-title"
         name="title"
         minLength={1}
@@ -54,7 +57,7 @@ export function CourseFormView({
   );
 }
 
-export function CourseForm({ requestId }: { requestId: string }) {
+export function CourseForm({ requestId, autoFocus = false }: { requestId: string; autoFocus?: boolean }) {
   const [state, action, pending] = useActionState(
     createCourseAction,
     initialState,
@@ -63,6 +66,7 @@ export function CourseForm({ requestId }: { requestId: string }) {
   return (
     <CourseFormView
       action={action}
+      autoFocus={autoFocus}
       pending={pending}
       requestId={requestId}
       state={state}

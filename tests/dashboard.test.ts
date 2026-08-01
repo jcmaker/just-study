@@ -12,6 +12,7 @@ import {
   courseAccentIndex,
   courseCardModel,
   courseProgress,
+  coursesEmptyState,
   filterCourses,
   normalizeCourseFilter,
   normalizeTab,
@@ -564,6 +565,21 @@ test("filter selects by stored status only", () => {
   assert.deepEqual(filterCourses(courses, "draft").map(({ id }) => id), ["a"]);
   assert.deepEqual(filterCourses(courses, "active").map(({ id }) => id), ["b"]);
   assert.deepEqual(filterCourses(courses, "completed").map(({ id }) => id), ["c"]);
+});
+
+test("course list distinguishes no courses from an empty filter", () => {
+  const none = coursesEmptyState(0, 0, "all");
+  assert.equal(none?.kind, "no-courses");
+  assert.equal(none?.title, "아직 저장된 과정이 없습니다");
+  assert.equal(none?.actionLabel, "새 과정 만들기");
+
+  const filtered = coursesEmptyState(3, 0, "completed");
+  assert.equal(filtered?.kind, "no-matches");
+  assert.equal(filtered?.title, "완료 상태의 과정이 없습니다");
+  assert.equal(filtered?.actionLabel, "필터 해제");
+
+  assert.equal(coursesEmptyState(3, 2, "active"), null);
+  assert.equal(coursesEmptyState(3, 3, "all"), null);
 });
 
 test("course accent is a stable identity-only palette index", () => {
