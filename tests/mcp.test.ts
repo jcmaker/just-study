@@ -123,6 +123,48 @@ test("rejects unsupported media types and oversized streamed bodies", async () =
   assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime, undefined);
 });
 
+test("rejects a streamed body exceeding the byte bound with no declared Content-Length", { concurrency: false }, async () => {
+  clearTestRuntime();
+  // A Uint8Array body lets fetch compute an exact Content-Length, which is only
+  // caught by boundedBody's declared-length pre-check. A ReadableStream body has
+  // no known length, so this exercises the actual streaming-loop bound instead.
+  // Keep this memory-sane: a few small chunks that together exceed 8 MiB is
+  // enough to prove the loop aborts partway rather than buffering everything.
+  const chunkBytes = 2 * 1024 * 1024;
+  const chunksAvailable = 10; // 20 MiB available if the loop never stopped early
+  let pulls = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulls >= chunksAvailable) {
+        controller.close();
+        return;
+      }
+      pulls += 1;
+      controller.enqueue(new Uint8Array(chunkBytes));
+    },
+  });
+  const request = new Request("http://127.0.0.1:3000/mcp", {
+    method: "POST",
+    headers: { host: "127.0.0.1:3000", "content-type": "application/json" },
+    body: stream,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+  assert.equal(request.headers.has("content-length"), false);
+
+  const response = await mcpRoute.POST(request);
+  assert.equal(response.status, 413);
+  assert.ok(pulls < chunksAvailable, "the loop must abort before consuming the whole stream");
+  assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime, undefined);
+});
+
+test("rejects Sec-Fetch-Site: cross-site before MCP parsing", async () => {
+  clearTestRuntime();
+  const response = await mcpRoute.POST(mcpRequest("{}", { "sec-fetch-site": "cross-site" }));
+  assert.equal(response.status, 403);
+  assert.equal(response.headers.has("access-control-allow-origin"), false);
+  assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime, undefined);
+});
+
 test("rejects malformed JSON before any tool mutation", async () => {
   clearTestRuntime();
   const response = await mcpRoute.POST(mcpRequest("{", {
