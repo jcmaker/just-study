@@ -15,7 +15,7 @@ import test from "node:test";
 
 import Database from "better-sqlite3";
 
-import { createCourse } from "../src/server/courses.ts";
+import { UUID_PATTERN, createCourse } from "../src/server/courses.ts";
 import {
   LearningRevisionConflictError,
   LearningStateError,
@@ -199,6 +199,19 @@ function dailyResearch(dayNumber: number): ResearchBundleInput {
     evidence: bundle.sources.map(({ id }) => ({ sourceId: id, stance: "supports" as const })),
   }];
   return bundle;
+}
+
+function withLocalResearchKeys(bundle: ResearchBundleInput): ResearchBundleInput {
+  const sourceKeys = new Map(bundle.sources.map((source, index) => [source.id, `s-${index + 1}`]));
+  return {
+    ...bundle,
+    sources: bundle.sources.map((source, index) => ({ ...source, id: `s-${index + 1}` })),
+    claims: bundle.claims.map((claim, index) => ({
+      ...claim,
+      id: `c-${index + 1}`,
+      evidence: claim.evidence.map((evidence) => ({ ...evidence, sourceId: sourceKeys.get(evidence.sourceId)! })),
+    })),
+  };
 }
 
 function quizQuestions(prefix: string) {
@@ -908,6 +921,42 @@ test("persists opposing evidence and explicit uncertainty", () => {
   });
 });
 
+test("canonicalizes reusable local research keys on every persisted run", () => {
+  withDataRoot((dataRoot, db) => {
+    const shell = createShell(db, dataRoot);
+    const approval = validApproval(shell.id);
+    approval.research = withLocalResearchKeys(approval.research);
+    let snapshot = approveOutline(db, dataRoot, approval);
+    const courseRun = snapshot.researchRuns[0]!;
+
+    const daily = withLocalResearchKeys(dailyResearch(1));
+    snapshot = recordDailyResearch(db, dataRoot, {
+      courseId: shell.id,
+      expectedRevision: snapshot.course.revision,
+      research: daily,
+    });
+    const dayRun = snapshot.researchRuns.find(({ scope }) => scope === "day")!;
+
+    const sourceIds = [...courseRun.sources, ...dayRun.sources].map(({ id }) => id);
+    const claimIds = [...courseRun.claims, ...dayRun.claims].map(({ id }) => id);
+    assert.equal(new Set(sourceIds).size, sourceIds.length);
+    assert.equal(new Set(claimIds).size, claimIds.length);
+    assert.ok(sourceIds.every((id) => UUID_PATTERN.test(id)));
+    assert.ok(claimIds.every((id) => UUID_PATTERN.test(id)));
+    for (const run of [courseRun, dayRun]) {
+      const runSourceIds = new Set(run.sources.map(({ id }) => id));
+      assert.ok(run.claims.every((claim) => claim.evidence.every(({ sourceId }) => UUID_PATTERN.test(sourceId) && runSourceIds.has(sourceId))));
+    }
+
+    const storedSourceIds = (db.prepare("SELECT id FROM research_sources").all() as { id: string }[]).map(({ id }) => id);
+    const storedClaimIds = (db.prepare("SELECT id FROM research_claims").all() as { id: string }[]).map(({ id }) => id);
+    const storedEvidence = db.prepare("SELECT claim_id, source_id FROM research_claim_evidence").all() as { claim_id: string; source_id: string }[];
+    assert.ok(storedSourceIds.every((id) => UUID_PATTERN.test(id)));
+    assert.ok(storedClaimIds.every((id) => UUID_PATTERN.test(id)));
+    assert.ok(storedEvidence.every(({ claim_id, source_id }) => UUID_PATTERN.test(claim_id) && UUID_PATTERN.test(source_id)));
+  });
+});
+
 test("a rejected or stale approval leaves the shell and Markdown unchanged", () => {
   withDataRoot((dataRoot, db) => {
     const shell = createShell(db, dataRoot);
@@ -939,6 +988,9 @@ test("rejects invalid research inputs without side effects", async (t) => {
       input.research.claims = input.research.claims.map((claim) => ({ ...claim, major: false }));
     }],
     ["missing evidence source", (input) => { input.research.claims = [{ ...input.research.claims[0]!, evidence: [{ sourceId: crypto.randomUUID(), stance: "supports" }] }]; }],
+    ["path-like source key", (input) => { input.research.sources[0]!.id = "s/1"; }],
+    ["spaced claim key", (input) => { input.research.claims[0]!.id = "c 1"; }],
+    ["overlength evidence source key", (input) => { input.research.claims = [{ ...input.research.claims[0]!, evidence: [{ sourceId: "s".repeat(65), stance: "supports" }] }]; }],
     ["duplicate evidence", (input) => {
       const evidence = input.research.claims[0]!.evidence[0]!;
       input.research.claims = [{ ...input.research.claims[0]!, evidence: [evidence, evidence] }];

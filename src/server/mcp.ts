@@ -187,6 +187,7 @@ function runTool<T extends object>(summary: (value: T) => string, operation: () 
 }
 
 const requiredText = (maximum: number) => z.string().min(1).max(maximum).refine((value) => !value.includes("\0"));
+const researchLocalKeySchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/);
 const rubricSchema = z.object({
   authority: z.number().int().min(0).max(25),
   crossValidation: z.number().int().min(0).max(25),
@@ -196,11 +197,11 @@ const rubricSchema = z.object({
   accessibility: z.number().int().min(0).max(5),
 }).strict();
 const evidenceSchema = z.object({
-  sourceId: uuidSchema,
+  sourceId: researchLocalKeySchema,
   stance: z.enum(["supports", "opposes", "context"]),
 }).strict();
 const sourceInputSchema = z.object({
-  id: uuidSchema,
+  id: researchLocalKeySchema,
   url: requiredText(2_048),
   title: requiredText(500),
   publisher: requiredText(300),
@@ -212,26 +213,48 @@ const sourceInputSchema = z.object({
   limitation: requiredText(2_000).nullable(),
 }).strict();
 const claimSchema = z.object({
-  id: uuidSchema,
+  id: researchLocalKeySchema,
   statement: requiredText(5_000),
   major: z.boolean(),
   conclusion: requiredText(5_000),
   uncertainty: requiredText(5_000).nullable(),
   evidence: z.array(evidenceSchema).min(1),
 }).strict();
-const researchInputSchema = z.object({
+const researchInputObjectSchema = z.object({
   questions: z.array(requiredText(1_000)).min(1).max(20),
   topicCriteria: z.array(requiredText(1_000)).min(1).max(20),
   narrativeMarkdown: requiredText(1_000_000),
   sources: z.array(sourceInputSchema).min(1).max(100),
   claims: z.array(claimSchema).min(1).max(100),
 }).strict();
-const sourceOutputSchema = sourceInputSchema.extend({ totalScore: z.number().int().min(0).max(100) });
-const researchRunSchema = researchInputSchema.omit({ narrativeMarkdown: true }).extend({
+const researchInputSchema = researchInputObjectSchema.superRefine((research, context) => {
+  const sourceIds = new Set<string>();
+  research.sources.forEach((source, index) => {
+    if (sourceIds.has(source.id)) context.addIssue({ code: "custom", path: ["sources", index, "id"], message: "source ID is duplicated" });
+    sourceIds.add(source.id);
+  });
+  const claimIds = new Set<string>();
+  research.claims.forEach((claim, claimIndex) => {
+    if (claimIds.has(claim.id)) context.addIssue({ code: "custom", path: ["claims", claimIndex, "id"], message: "claim ID is duplicated" });
+    claimIds.add(claim.id);
+    const evidenceKeys = new Set<string>();
+    claim.evidence.forEach((evidence, evidenceIndex) => {
+      if (!sourceIds.has(evidence.sourceId)) context.addIssue({ code: "custom", path: ["claims", claimIndex, "evidence", evidenceIndex, "sourceId"], message: "claim evidence source is missing" });
+      const key = `${evidence.sourceId}:${evidence.stance}`;
+      if (evidenceKeys.has(key)) context.addIssue({ code: "custom", path: ["claims", claimIndex, "evidence", evidenceIndex], message: "claim evidence is duplicated" });
+      evidenceKeys.add(key);
+    });
+  });
+});
+const evidenceOutputSchema = evidenceSchema.extend({ sourceId: uuidSchema });
+const sourceOutputSchema = sourceInputSchema.extend({ id: uuidSchema, totalScore: z.number().int().min(0).max(100) });
+const claimOutputSchema = claimSchema.extend({ id: uuidSchema, evidence: z.array(evidenceOutputSchema).min(1) });
+const researchRunSchema = researchInputObjectSchema.omit({ narrativeMarkdown: true, sources: true, claims: true }).extend({
   id: uuidSchema,
   scope: z.enum(["course", "day"]),
   dayId: uuidSchema.nullable(),
   sources: z.array(sourceOutputSchema),
+  claims: z.array(claimOutputSchema),
   createdAt: z.string(),
 });
 const learningDaySchema = z.object({

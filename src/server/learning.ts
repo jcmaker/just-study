@@ -92,6 +92,8 @@ function rubricTotal(scores: unknown): number {
   return total;
 }
 
+const RESEARCH_LOCAL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
 function validateResearchBundle(input: unknown): ResearchBundleInput {
   if (typeof input !== "object" || input === null || Array.isArray(input)) throw new LearningValidationError("research is required");
   const research = input as Partial<ResearchBundleInput>;
@@ -107,7 +109,7 @@ function validateResearchBundle(input: unknown): ResearchBundleInput {
   let selectedCount = 0;
   for (const source of sources) {
     if (typeof source !== "object" || source === null || Array.isArray(source)) throw new LearningValidationError("research source is invalid");
-    if (!UUID_PATTERN.test(source.id) || sourceIds.has(source.id)) throw new LearningValidationError("source ID is invalid or duplicated");
+    if (typeof source.id !== "string" || !RESEARCH_LOCAL_KEY_PATTERN.test(source.id) || sourceIds.has(source.id)) throw new LearningValidationError("source ID is invalid or duplicated");
     const urlText = requiredText(source.url, "source URL", 2_048);
     let url: URL;
     try { url = new URL(urlText); } catch { throw new LearningValidationError("source URL is invalid or duplicated"); }
@@ -137,7 +139,7 @@ function validateResearchBundle(input: unknown): ResearchBundleInput {
   const normalizedClaims: ResearchClaimInput[] = [];
   for (const claim of claims) {
     if (typeof claim !== "object" || claim === null || Array.isArray(claim)) throw new LearningValidationError("research claim is invalid");
-    if (!UUID_PATTERN.test(claim.id) || claimIds.has(claim.id)) throw new LearningValidationError("claim ID is invalid or duplicated");
+    if (typeof claim.id !== "string" || !RESEARCH_LOCAL_KEY_PATTERN.test(claim.id) || claimIds.has(claim.id)) throw new LearningValidationError("claim ID is invalid or duplicated");
     const statement = requiredText(claim.statement, "claim statement", 5_000), conclusion = requiredText(claim.conclusion, "claim conclusion", 5_000);
     if (typeof claim.major !== "boolean") throw new LearningValidationError("claim major is invalid");
     if (claim.uncertainty !== null && typeof claim.uncertainty !== "string") throw new LearningValidationError("claim uncertainty is invalid");
@@ -146,6 +148,7 @@ function validateResearchBundle(input: unknown): ResearchBundleInput {
     const evidenceKeys = new Set<string>();
     for (const evidence of claim.evidence) {
       if (typeof evidence !== "object" || evidence === null || Array.isArray(evidence) || typeof evidence.sourceId !== "string") throw new LearningValidationError("claim evidence is invalid");
+      if (!RESEARCH_LOCAL_KEY_PATTERN.test(evidence.sourceId)) throw new LearningValidationError("claim evidence source ID is invalid");
       if (!sourceIds.has(evidence.sourceId)) throw new LearningValidationError("claim evidence source is missing");
       if (!['supports', 'opposes', 'context'].includes(evidence.stance)) throw new LearningValidationError("claim evidence stance is invalid");
       const key = `${evidence.sourceId}:${evidence.stance}`;
@@ -165,12 +168,14 @@ function validateResearchBundle(input: unknown): ResearchBundleInput {
 
 function insertResearchRun(db: DatabaseHandle, courseId: string, dayId: string | null, research: ResearchBundleInput, createdAt: string): string {
   const runId = randomUUID();
+  const sourceIds = new Map(research.sources.map(({ id }) => [id, randomUUID()]));
+  const claimIds = new Map(research.claims.map(({ id }) => [id, randomUUID()]));
   db.prepare(`INSERT INTO research_runs (id, course_id, day_id, scope, questions_json, topic_criteria_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(runId, courseId, dayId, dayId === null ? "course" : "day", JSON.stringify(research.questions), JSON.stringify(research.topicCriteria), createdAt);
   const insertSource = db.prepare(`INSERT INTO research_sources (id, run_id, url, title, publisher, independence_key, authority_score, cross_validation_score, relevance_score, teaching_quality_score, currency_score, accessibility_score, rank, selected, selection_reason, limitation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  for (const source of research.sources) insertSource.run(source.id, runId, source.url, source.title, source.publisher, source.independenceKey, source.scores.authority, source.scores.crossValidation, source.scores.relevance, source.scores.teachingQuality, source.scores.currency, source.scores.accessibility, source.rank, source.selected ? 1 : 0, source.selectionReason, source.limitation);
+  for (const source of research.sources) insertSource.run(sourceIds.get(source.id)!, runId, source.url, source.title, source.publisher, source.independenceKey, source.scores.authority, source.scores.crossValidation, source.scores.relevance, source.scores.teachingQuality, source.scores.currency, source.scores.accessibility, source.rank, source.selected ? 1 : 0, source.selectionReason, source.limitation);
   const insertClaim = db.prepare(`INSERT INTO research_claims (id, run_id, statement, major, conclusion, uncertainty) VALUES (?, ?, ?, ?, ?, ?)`);
   const insertEvidence = db.prepare(`INSERT INTO research_claim_evidence (run_id, claim_id, source_id, stance) VALUES (?, ?, ?, ?)`);
-  for (const claim of research.claims) { insertClaim.run(claim.id, runId, claim.statement, claim.major ? 1 : 0, claim.conclusion, claim.uncertainty); for (const evidence of claim.evidence) insertEvidence.run(runId, claim.id, evidence.sourceId, evidence.stance); }
+  for (const claim of research.claims) { const claimId = claimIds.get(claim.id)!; insertClaim.run(claimId, runId, claim.statement, claim.major ? 1 : 0, claim.conclusion, claim.uncertainty); for (const evidence of claim.evidence) insertEvidence.run(runId, claimId, sourceIds.get(evidence.sourceId)!, evidence.stance); }
   return runId;
 }
 

@@ -7,7 +7,7 @@ import test from "node:test";
 
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 
-import { CourseValidationError, createCourse } from "../src/server/courses.ts";
+import { CourseValidationError, UUID_PATTERN, createCourse } from "../src/server/courses.ts";
 import { openDatabase } from "../src/server/database.ts";
 import type { DatabaseHandle } from "../src/server/database.ts";
 import * as mcpRoute from "../src/app/mcp/route.ts";
@@ -864,6 +864,19 @@ function validResearch(topic: string) {
   };
 }
 
+function withLocalResearchKeys<T extends ReturnType<typeof validResearch>>(research: T): T {
+  const sourceKeys = new Map(research.sources.map((source, index) => [source.id, `s-${index + 1}`]));
+  return {
+    ...research,
+    sources: research.sources.map((source, index) => ({ ...source, id: `s-${index + 1}` })),
+    claims: research.claims.map((claim, index) => ({
+      ...claim,
+      id: `c-${index + 1}`,
+      evidence: claim.evidence.map((evidence) => ({ ...evidence, sourceId: sourceKeys.get(evidence.sourceId)! })),
+    })),
+  } as T;
+}
+
 const fullLesson = {
   recallMarkdown: "전날 개념을 한 문장으로 회상한다.",
   preciseExplanationMarkdown: "정확한 정의와 작동 원리를 설명한다.",
@@ -1123,6 +1136,53 @@ test("approves outline, research runs, and rejects stale revision conflict and 2
       assert.equal(secondState.data.state.course.revision, 0);
       assert.deepEqual(secondState.data.state.days, []);
       assert.deepEqual(secondState.data.state.researchRuns, []);
+    });
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("accepts reusable local research keys and returns canonical identifiers", { concurrency: false }, async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+  try {
+    await withMcpClient(async (client) => {
+      const created = structured<{ ok: true; data: { course: { id: string } } }>(
+        await client.callTool({ name: "create_course", arguments: { requestId: crypto.randomUUID(), title: "로컬 키", goal: "서버가 연구 식별자를 정식화한다." } }),
+      );
+      const courseId = created.data.course.id;
+      const approved = structured<StateResult>(
+        await client.callTool({
+          name: "approve_outline",
+          arguments: {
+            courseId,
+            expectedRevision: 0,
+            priorKnowledge: "기초 지식",
+            learningPreference: "examples",
+            knowledgeMapMarkdown: "기초 → 적용",
+            research: withLocalResearchKeys(validResearch("로컬 키 과정")),
+            days: Array.from({ length: 30 }, (_, index) => ({ objective: `목표 ${index + 1}` })),
+          },
+        }),
+      );
+      const courseRun = approved.data.state.researchRuns[0]!;
+      const researched = structured<StateResult>(
+        await client.callTool({ name: "record_daily_research", arguments: { courseId, expectedRevision: 1, research: withLocalResearchKeys(validResearch("로컬 키 Day 1")) } }),
+      );
+      const dayRun = researched.data.state.researchRuns.find(({ scope }) => scope === "day")!;
+      const sourceIds = [...courseRun.sources, ...dayRun.sources].map(({ id }) => id);
+      const claimIds = [...courseRun.claims, ...dayRun.claims].map(({ id }) => id);
+      assert.equal(new Set(sourceIds).size, sourceIds.length);
+      assert.equal(new Set(claimIds).size, claimIds.length);
+      assert.ok(sourceIds.every((id) => UUID_PATTERN.test(id)));
+      assert.ok(claimIds.every((id) => UUID_PATTERN.test(id)));
+      for (const run of [courseRun, dayRun]) {
+        const runSourceIds = new Set(run.sources.map(({ id }) => id));
+        assert.ok(run.claims.every((claim) => claim.evidence.every(({ sourceId }) => UUID_PATTERN.test(sourceId) && runSourceIds.has(sourceId))));
+      }
     });
   } finally {
     db.close();
@@ -1485,6 +1545,18 @@ test("schema rejection matrix rejects without mutation", { concurrency: false },
         ["record_daily_research", {
           ...validShapes.record_daily_research,
           research: { ...research, questions: Array.from({ length: 21 }, (_, index) => `질문 ${index + 1}`) },
+        }],
+        ["approve_outline", {
+          ...validShapes.approve_outline,
+          research: { ...research, sources: [{ ...research.sources[0]!, id: "s/1" }, ...research.sources.slice(1)] },
+        }],
+        ["approve_outline", {
+          ...validShapes.approve_outline,
+          research: { ...research, claims: [{ ...research.claims[0]!, id: "c 1" }] },
+        }],
+        ["record_daily_research", {
+          ...validShapes.record_daily_research,
+          research: { ...research, claims: [{ ...research.claims[0]!, evidence: [{ sourceId: "s".repeat(65), stance: "supports" }] }] },
         }],
         ["save_checkpoint", {
           ...validShapes.save_checkpoint,
