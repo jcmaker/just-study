@@ -15,13 +15,17 @@ import {
 import { getHealth } from "./health.ts";
 import {
   approveOutline,
+  completeDay,
   getLearningDocument,
   getLearningSnapshot,
+  gradeQuiz,
   LearningRevisionConflictError,
   LearningStateError,
   LearningValidationError,
   recordDailyResearch,
   saveLearningCheckpoint,
+  startQuiz,
+  startRemediationQuiz,
   type LearningSnapshot,
 } from "./learning.ts";
 import type { DatabaseHandle } from "./database.ts";
@@ -286,6 +290,25 @@ const lessonSchema = z.object({
 }).strict();
 const conceptKeySchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/);
 const conceptSchema = z.object({ key: conceptKeySchema, label: requiredText(300) }).strict();
+const quizQuestionSchema = z.object({
+  id: uuidSchema,
+  conceptKey: conceptKeySchema,
+  conceptLabel: requiredText(300),
+  prompt: requiredText(10_000),
+  gradingCriteria: requiredText(10_000),
+}).strict();
+const gradeSchema = z.object({
+  questionId: uuidSchema,
+  answer: requiredText(50_000),
+  result: z.enum(["correct", "incorrect", "needs_clarification"]),
+  feedback: requiredText(10_000),
+  clarificationQuestion: requiredText(10_000).optional(),
+}).strict();
+const reflectionSchema = z.object({
+  learned: requiredText(10_000),
+  confusing: requiredText(10_000),
+  feeling: requiredText(10_000),
+}).strict();
 const writeAnnotations = {
   readOnlyHint: false,
   destructiveHint: false,
@@ -473,6 +496,54 @@ export function createJustStudyMcpServer(): McpServer {
       annotations: writeAnnotations,
     },
     async (input) => withSafeInput(input, (value) => stateTool("학습 체크포인트를 저장했습니다.", (db, root) => saveLearningCheckpoint(db, root, value))),
+  );
+
+  server.registerTool(
+    "start_quiz",
+    {
+      title: "Start the current Day quiz",
+      description: "Stores exactly five questions fixed before seeing the learner's answers.",
+      inputSchema: safeInputSchema(z.object({ courseId: uuidSchema, expectedRevision: revisionSchema, questions: z.array(quizQuestionSchema).length(5) }).strict()),
+      outputSchema: stateOutputSchema,
+      annotations: writeAnnotations,
+    },
+    async (input) => withSafeInput(input, (value) => stateTool("다섯 문제 퀴즈를 시작했습니다.", (db, root) => startQuiz(db, root, value))),
+  );
+
+  server.registerTool(
+    "grade_quiz",
+    {
+      title: "Grade quiz responses",
+      description: "Stores one to five supplied answers, judgments, feedback, and optional clarification without inventing answers.",
+      inputSchema: safeInputSchema(z.object({ courseId: uuidSchema, expectedRevision: revisionSchema, attemptId: uuidSchema, grades: z.array(gradeSchema).min(1).max(5) }).strict()),
+      outputSchema: stateOutputSchema,
+      annotations: writeAnnotations,
+    },
+    async (input) => withSafeInput(input, (value) => stateTool("퀴즈 응답과 판정을 저장했습니다.", (db, root) => gradeQuiz(db, root, value))),
+  );
+
+  server.registerTool(
+    "start_remediation_quiz",
+    {
+      title: "Start a new remediation quiz",
+      description: "Stores a different explanation and five new questions covering every remediation concept.",
+      inputSchema: safeInputSchema(z.object({ courseId: uuidSchema, expectedRevision: revisionSchema, remediationMarkdown: requiredText(1_000_000), questions: z.array(quizQuestionSchema).length(5) }).strict()),
+      outputSchema: stateOutputSchema,
+      annotations: writeAnnotations,
+    },
+    async (input) => withSafeInput(input, (value) => stateTool("새 보충 퀴즈를 시작했습니다.", (db, root) => startRemediationQuiz(db, root, value))),
+  );
+
+  server.registerTool(
+    "complete_day",
+    {
+      title: "Complete the current learning Day",
+      description: "Stores three reflections after verified daily research and a passed five-of-five quiz.",
+      inputSchema: safeInputSchema(z.object({ courseId: uuidSchema, expectedRevision: revisionSchema, reflection: reflectionSchema }).strict()),
+      outputSchema: stateOutputSchema,
+      annotations: writeAnnotations,
+    },
+    async (input) => withSafeInput(input, (value) => stateTool("오늘의 학습과 회고를 완료했습니다.", (db, root) => completeDay(db, root, value))),
   );
 
   return server;

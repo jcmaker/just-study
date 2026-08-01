@@ -420,6 +420,145 @@ async function createLectureReadyCourse(client: Client): Promise<{ courseId: str
   return { courseId, state: checkpoint.data.state };
 }
 
+function quizQuestions(prefix: string) {
+  return Array.from({ length: 5 }, (_, index) => ({
+    id: crypto.randomUUID(),
+    conceptKey: `${prefix}-${index + 1}`,
+    conceptLabel: `${prefix} 개념 ${index + 1}`,
+    prompt: `${prefix} 질문 ${index + 1}: 핵심 원리를 설명하세요.`,
+    gradingCriteria: "핵심 원리와 적용 이유를 모두 설명한다.",
+  }));
+}
+
+function terminalGrades(
+  questions: ReturnType<typeof quizQuestions>,
+  incorrectIndex: number | null,
+) {
+  return questions.map((question, index) => ({
+    questionId: question.id,
+    answer: `${question.conceptLabel}에 대한 사용자 답변`,
+    result: index === incorrectIndex ? "incorrect" as const : "correct" as const,
+    feedback: index === incorrectIndex ? "적용 이유를 보완해야 합니다." : "핵심 원리와 적용 이유가 정확합니다.",
+  }));
+}
+
+test("drives ambiguity, 4/5 remediation, and 5/5 reflection through the full Day state machine", { concurrency: false }, async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+  try {
+    await withMcpClient(async (client) => {
+      const { courseId, state: lectureReady } = await createLectureReadyCourse(client);
+      assert.equal(lectureReady.course.revision, 3);
+      const firstQuestions = quizQuestions("initial");
+      const started = structured<StateResult>(await client.callTool({
+        name: "start_quiz",
+        arguments: { courseId, expectedRevision: 3, questions: firstQuestions },
+      }));
+      const firstAttempt = started.data.state.quizAttempts.at(-1)!;
+      assert.equal(started.data.state.course.revision, 4);
+      assert.equal(started.data.state.course.currentStage, "quiz");
+
+      const clarification = structured<StateResult>(await client.callTool({
+        name: "grade_quiz",
+        arguments: {
+          courseId,
+          expectedRevision: 4,
+          attemptId: firstAttempt.id,
+          grades: [{
+            questionId: firstQuestions[0]!.id,
+            answer: "정렬한다는 뜻인가요?",
+            result: "needs_clarification",
+            feedback: "어떤 비용을 기준으로 정렬하는지 불명확합니다.",
+            clarificationQuestion: "시간 비용과 공간 비용 중 무엇을 뜻하나요?",
+          }],
+        },
+      }));
+      assert.equal(clarification.data.state.course.revision, 5);
+      assert.equal(clarification.data.state.course.currentStage, "quiz");
+
+      const failed = structured<StateResult>(await client.callTool({
+        name: "grade_quiz",
+        arguments: {
+          courseId,
+          expectedRevision: 5,
+          attemptId: firstAttempt.id,
+          grades: terminalGrades(firstQuestions, 4),
+        },
+      }));
+      assert.equal(failed.data.state.quizAttempts.at(-1)!.score, 4);
+      assert.equal(failed.data.state.course.currentStage, "remediation");
+      assert.equal(failed.data.state.course.revision, 6);
+
+      const remediation = structured<StateResult>(await client.callTool({
+        name: "save_checkpoint",
+        arguments: { courseId, expectedRevision: 6, lesson: { remediationMarkdown: "다른 비유와 반례로 취약 개념을 다시 설명한다." } },
+      }));
+      assert.equal(remediation.data.state.course.revision, 7);
+
+      const secondQuestions = quizQuestions("remediation");
+      secondQuestions[0] = {
+        ...secondQuestions[0]!,
+        conceptKey: "tradeoff",
+        conceptLabel: "시간·공간 절충",
+      };
+      secondQuestions[1] = {
+        ...secondQuestions[1]!,
+        conceptKey: firstQuestions[4]!.conceptKey,
+        conceptLabel: firstQuestions[4]!.conceptLabel,
+      };
+      const restarted = structured<StateResult>(await client.callTool({
+        name: "start_remediation_quiz",
+        arguments: { courseId, expectedRevision: 7, remediationMarkdown: "새 예제로 다시 적용한다.", questions: secondQuestions },
+      }));
+      const secondAttempt = restarted.data.state.quizAttempts.at(-1)!;
+      assert.equal(restarted.data.state.course.revision, 8);
+
+      const passed = structured<StateResult>(await client.callTool({
+        name: "grade_quiz",
+        arguments: { courseId, expectedRevision: 8, attemptId: secondAttempt.id, grades: terminalGrades(secondQuestions, null) },
+      }));
+      assert.equal(passed.data.state.quizAttempts.at(-1)!.score, 5);
+      assert.equal(passed.data.state.course.currentStage, "reflection");
+      assert.equal(passed.data.state.course.revision, 9);
+
+      const completed = structured<StateResult>(await client.callTool({
+        name: "complete_day",
+        arguments: {
+          courseId,
+          expectedRevision: 9,
+          reflection: { learned: "자료구조 선택 기준", confusing: "상각 분석", feeling: "적용할 수 있다" },
+        },
+      }));
+      assert.equal(completed.data.state.currentDay?.dayNumber, 2);
+      assert.equal(completed.data.state.course.currentStage, "lecture");
+      assert.equal(completed.data.state.course.revision, 10);
+
+      const repeat = await client.callTool({
+        name: "complete_day",
+        arguments: {
+          courseId,
+          expectedRevision: 9,
+          reflection: { learned: "자료구조 선택 기준", confusing: "상각 분석", feeling: "적용할 수 있다" },
+        },
+      });
+      assert.equal(repeat.isError, true);
+      assert.equal((repeat.structuredContent as { error: { code: string } }).error.code, "REVISION_CONFLICT");
+
+      const stillDay2 = structured<StateResult>(
+        await client.callTool({ name: "get_learning_state", arguments: { courseId } }),
+      );
+      assert.equal(stillDay2.data.state.currentDay?.dayNumber, 2);
+      assert.equal(stillDay2.data.state.course.currentStage, "lecture");
+      assert.equal(stillDay2.data.state.course.revision, 10);
+    });
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("approves outline, research runs, and rejects stale revision conflict and 29 Days outlines", { concurrency: false }, async () => {
   const dataRoot = makeDataRoot();
   const db = openDatabase(dataRoot);
@@ -477,6 +616,54 @@ test("approves outline, research runs, and rejects stale revision conflict and 2
       assert.equal(secondState.data.state.course.revision, 0);
       assert.deepEqual(secondState.data.state.days, []);
       assert.deepEqual(secondState.data.state.researchRuns, []);
+    });
+  } finally {
+    db.close();
+    clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("registers exactly the twelve approved tools with correct annotations and an uncorrupted create_course contract", { concurrency: false }, async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  setTestRuntime(dataRoot, db);
+  try {
+    await withMcpClient(async (client) => {
+      const tools = (await client.listTools()).tools;
+      const names = tools.map(({ name }) => name).sort();
+      assert.deepEqual(names, [
+        "approve_outline",
+        "complete_day",
+        "create_course",
+        "get_learning_state",
+        "grade_quiz",
+        "health",
+        "list_courses",
+        "read_learning_document",
+        "record_daily_research",
+        "save_checkpoint",
+        "start_quiz",
+        "start_remediation_quiz",
+      ]);
+
+      const readOnlyNames = new Set(["health", "list_courses", "get_learning_state", "read_learning_document"]);
+      for (const tool of tools) {
+        const expectedReadOnly = readOnlyNames.has(tool.name);
+        assert.equal(tool.annotations?.readOnlyHint, expectedReadOnly, `${tool.name} readOnlyHint`);
+        assert.equal(tool.annotations?.openWorldHint, false, `${tool.name} openWorldHint`);
+        if (!expectedReadOnly) {
+          const expectedIdempotent = tool.name === "create_course";
+          assert.equal(tool.annotations?.idempotentHint, expectedIdempotent, `${tool.name} idempotentHint`);
+        }
+      }
+
+      const createDefinition = tools.find(({ name }) => name === "create_course")!;
+      const createInputSchema = createDefinition.inputSchema as { properties?: Record<string, unknown> };
+      const createProperties = createInputSchema.properties ?? {};
+      assert.deepEqual(Object.keys(createProperties).sort(), ["goal", "requestId", "title"]);
+      assert.equal(JSON.stringify(createDefinition.inputSchema).includes('"value"'), false);
+      assert.equal(JSON.stringify(createDefinition.inputSchema).includes('"ok"'), false);
     });
   } finally {
     db.close();
