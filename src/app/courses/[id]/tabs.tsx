@@ -5,12 +5,10 @@ import {
   COURSE_TABS,
   COURSE_TAB_LABELS,
   documentState,
-  RESUME_COMMAND,
   STAGE_LABELS,
   type CourseTab,
 } from "../../../server/dashboard-view.ts";
 import type { CourseHistory, CourseHistoryCourse, LearningSnapshot } from "../../../server/learning.ts";
-import { CopyCommand } from "../../copy-command.tsx";
 import { MarkdownView } from "../../ui/markdown-view.tsx";
 import { Badge, Card, CardHeader } from "../../ui/primitives.tsx";
 
@@ -371,11 +369,8 @@ export function TodayPanel({ course, history, snapshot, verified, unavailable, r
   reflection?: ReactNode;
 }) {
   const currentDay = snapshot?.currentDay ?? history.days.find(({ id }) => id === course.currentDayId) ?? null;
-  const sources = history.researchRuns
-    .filter((run) => run.scope === "day" && run.dayId === course.currentDayId)
-    .flatMap((run) => run.sources.filter(({ selected }) => selected));
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+    <div className="grid gap-4">
       <div className="grid gap-4">
         <Card>
           <h3 className="mt-0 mb-2 text-base font-bold">오늘의 목표</h3>
@@ -401,29 +396,6 @@ export function TodayPanel({ course, history, snapshot, verified, unavailable, r
           emptyDescription="Codex에서 $just-study 계속을 호출해 오늘의 리서치와 강의를 진행해 주세요."
         />
       </div>
-      <aside className="grid gap-4">
-        {course.status === "active" ? (
-          <Card>
-            <h3 className="mt-0 mb-2 text-base font-bold">Codex에서 이어가기</h3>
-            <CopyCommand command={RESUME_COMMAND} />
-          </Card>
-        ) : null}
-        <Card>
-          <h3 className="mt-0 mb-2 text-base font-bold">현재 Day 선정 출처</h3>
-          {sources.length === 0 ? (
-            <p className="m-0 text-sm text-muted-foreground">아직 오늘의 리서치가 저장되지 않았습니다.</p>
-          ) : (
-            <ul className="m-0 grid list-none gap-2 p-0 text-sm">
-              {sources.map((source) => (
-                <li key={source.id}>
-                  <ExternalSourceLink href={source.url} title={source.title} />
-                  <span className="block text-xs text-muted-foreground">{source.totalScore} / 100</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-      </aside>
     </div>
   );
 }
