@@ -815,3 +815,33 @@ export function getLearningSnapshot(db: DatabaseHandle, dataRoot: string, course
   const readOptional = (path: string | null, checksum: string | null): string | null => { if (path === null && checksum === null) return null; if (path === null || checksum === null) throw new LearningStateError("Document registration is incomplete"); return readVerifiedMarkdown(dataRoot, path, checksum); };
   return { course, days, currentDay, researchRuns, understoodConcepts: conceptRows.filter(({ status }) => status === "understood").map(({ concept_key, label }) => ({ key: concept_key, label })), remediationConcepts: conceptRows.filter(({ status }) => status === "remediation").map(({ concept_key, label }) => ({ key: concept_key, label })), quizAttempts, documents: { course: readVerifiedMarkdown(dataRoot, course.markdownPath, course.markdownSha256), progress: readOptional(course.progressMarkdownPath, course.progressMarkdownSha256), journal: readOptional(course.journalMarkdownPath, course.journalMarkdownSha256), currentDay: readOptional(course.currentDayMarkdownPath, course.currentDayMarkdownSha256) } };
 }
+
+export type LearningDocumentName = "course" | "progress" | "journal" | "current-day";
+
+export type LearningDocument = {
+  course: Course;
+  document: LearningDocumentName;
+  markdown: string;
+};
+
+export function getLearningDocument(
+  db: DatabaseHandle,
+  dataRoot: string,
+  courseId: string,
+  document: LearningDocumentName,
+): LearningDocument | null {
+  const course = getCourse(db, courseId);
+  if (!course) return null;
+  const registration = {
+    course: [course.markdownPath, course.markdownSha256],
+    progress: [course.progressMarkdownPath, course.progressMarkdownSha256],
+    journal: [course.journalMarkdownPath, course.journalMarkdownSha256],
+    "current-day": [course.currentDayMarkdownPath, course.currentDayMarkdownSha256],
+  } as const;
+  const [path, checksum] = registration[document];
+  if (path === null && checksum === null) return null;
+  if (path === null || checksum === null) {
+    throw new LearningStateError("Document registration is incomplete");
+  }
+  return { course, document, markdown: readVerifiedMarkdown(dataRoot, path, checksum) };
+}

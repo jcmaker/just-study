@@ -63,7 +63,7 @@ type UpdateRecord = {
   state: UpdateState;
 };
 
-class StorageError extends Error {}
+export class StorageError extends Error {}
 
 const drafts = new WeakMap<CourseDraft, DraftRecord>();
 const updates = new WeakMap<PreparedMarkdownUpdate, UpdateRecord>();
