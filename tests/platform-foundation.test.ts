@@ -1611,7 +1611,7 @@ test("new standalone dashboard links expose 44px keyboard and pointer targets", 
   }
 
   const notFound = renderToStaticMarkup(createElement(NotFound));
-  const homeClass = /<a class="([^"]*)" href="\/">과정 목록으로 돌아가기<\/a>/.exec(notFound)?.[1];
+  const homeClass = /<a class="([^"]*)" href="\/courses">과정 목록으로 돌아가기<\/a>/.exec(notFound)?.[1];
   assertTargetClasses(homeClass, "과정 목록으로 돌아가기");
 
   const courseCard = renderToStaticMarkup(createElement(CourseCard, {
@@ -2013,7 +2013,8 @@ test("UI missing page gives a Korean recovery path", async () => {
   const html = renderToStaticMarkup(createElement(NotFound));
 
   assert.match(html, /과정을 찾을 수 없습니다/);
-  assert.match(html, /href="\/">과정 목록으로 돌아가기<\/a>/);
+  // The label promises the course list, so the href must be /courses, not the Today dashboard.
+  assert.match(html, /href="\/courses">과정 목록으로 돌아가기<\/a>/);
 });
 
 test("UI status renders an uninitialized schema as initialization pending", async () => {
