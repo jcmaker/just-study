@@ -1172,7 +1172,7 @@ test("modules reachable from client components import no server-only code", () =
   assert.ok(seen.size >= clientEntry.length);
 });
 
-test("a draft action rejects a missing revision without mutating the course", async () => {
+test("a draft action rejects missing or blank revisions without mutating the course", async () => {
   const dataRoot = makeDataRoot();
   const db = openDatabase(dataRoot);
   const runtimeGlobal = globalThis as typeof globalThis & {
@@ -1187,20 +1187,28 @@ test("a draft action rejects a missing revision without mutating the course", as
       title: "수정 전 제목",
       goal: "수정 전 목표",
     }).course;
-    const formData = new FormData();
-    formData.set("courseId", course.id);
-    formData.set("title", "수정 후 제목");
-    formData.set("goal", "수정 후 목표");
+    const before = getCourseDocument(db, dataRoot, course.id)!;
 
-    const state = await updateCourseDraftAction({} as never, formData);
+    for (const rawRevision of [null, "", "   "] as const) {
+      const formData = new FormData();
+      formData.set("courseId", course.id);
+      formData.set("title", "수정 후 제목");
+      formData.set("goal", "수정 후 목표");
+      if (rawRevision !== null) {
+        formData.set("expectedRevision", rawRevision);
+      }
 
-    assert.equal(state.status, "error");
-    assert.equal(state.title, "수정 후 제목");
-    assert.equal(state.goal, "수정 후 목표");
-    const unchanged = getCourseDocument(db, dataRoot, course.id)!;
-    assert.equal(unchanged.course.revision, 0);
-    assert.equal(unchanged.course.title, "수정 전 제목");
-    assert.equal(unchanged.course.goal, "수정 전 목표");
+      const state = await updateCourseDraftAction({} as never, formData);
+
+      assert.equal(state.status, "error", JSON.stringify(rawRevision));
+      assert.equal(state.title, "수정 후 제목");
+      assert.equal(state.goal, "수정 후 목표");
+      const unchanged = getCourseDocument(db, dataRoot, course.id)!;
+      assert.equal(unchanged.markdown, before.markdown, JSON.stringify(rawRevision));
+      assert.equal(unchanged.course.revision, 0, JSON.stringify(rawRevision));
+      assert.equal(unchanged.course.title, "수정 전 제목", JSON.stringify(rawRevision));
+      assert.equal(unchanged.course.goal, "수정 전 목표", JSON.stringify(rawRevision));
+    }
   } finally {
     db.close();
     if (previousRuntime === undefined) delete runtimeGlobal.__justStudyRuntime;

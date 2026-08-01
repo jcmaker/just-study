@@ -52,9 +52,9 @@ export async function updateCourseDraftAction(
   const courseId = String(formData.get("courseId") ?? "");
   const rawExpectedRevision = formData.get("expectedRevision");
   const expectedRevision =
-    rawExpectedRevision === null || rawExpectedRevision === ""
-      ? Number.NaN
-      : Number(rawExpectedRevision);
+    typeof rawExpectedRevision === "string" && rawExpectedRevision.trim() !== ""
+      ? Number(rawExpectedRevision)
+      : Number.NaN;
 
   try {
     const runtime = getRuntime();
