@@ -1,0 +1,15 @@
+interface:
+  display_name: "Just Study"
+  short_description: "검증된 30일 학습 과정을 안전하게 만들고 이어갑니다"
+  default_prompt: "Use $just-study to create or continue a researched 30-day learning course."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "just-study"
+      description: "Local just-study learning state and persistence tools"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:3000/mcp"
+
+policy:
+  allow_implicit_invocation: false

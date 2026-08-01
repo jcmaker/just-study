@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
     "lint": "eslint .",
-    "test": "node --test tests/platform-foundation.test.ts tests/learning-engine.test.ts tests/mcp.test.ts"
+    "test": "node --test tests/platform-foundation.test.ts tests/learning-engine.test.ts tests/mcp.test.ts tests/codex-skill.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
