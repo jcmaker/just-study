@@ -24,7 +24,7 @@ import {
   toMcpFailure,
   type CompactLearningState,
 } from "../src/server/mcp.ts";
-import { DatabaseUnavailableError } from "../src/server/runtime.ts";
+import { DatabaseUnavailableError, getReadOnlyRuntime } from "../src/server/runtime.ts";
 import { StorageError } from "../src/server/storage.ts";
 
 function makeDataRoot(): string {
@@ -100,6 +100,20 @@ function setTestRuntime(dataRoot: string, db: DatabaseHandle | null): void {
 
 function clearTestRuntime(): void {
   delete (globalThis as TestRuntimeGlobal).__justStudyRuntime;
+}
+
+function closeAndClearTestRuntime(): void {
+  const runtime = (globalThis as TestRuntimeGlobal).__justStudyRuntime;
+  if (runtime?.db?.open) runtime.db.close();
+  clearTestRuntime();
+}
+
+async function loadStartupInitializer(): Promise<{ initializeExistingRuntime?: () => void }> {
+  return import("../src/server/runtime.ts") as Promise<{ initializeExistingRuntime?: () => void }>;
+}
+
+async function loadInstrumentation(): Promise<{ register?: () => Promise<void> }> {
+  return import("../src/instrumentation.ts") as Promise<{ register?: () => Promise<void> }>;
 }
 
 function mcpRequest(body: BodyInit, headers: Record<string, string> = {}): Request {
@@ -244,6 +258,181 @@ async function withMcpClient<T>(run: (client: Client) => Promise<T>): Promise<T>
     await client.close();
   }
 }
+
+test("startup registration leaves an empty root uninitialized until create_course", { concurrency: false }, async () => {
+  const parent = mkdtempSync(join(tmpdir(), "just-study-mcp-startup-empty-"));
+  const dataRoot = join(parent, "data");
+  const previousDataRoot = process.env.JUST_STUDY_DATA_DIR;
+  const previousRuntime = process.env.NEXT_RUNTIME;
+  closeAndClearTestRuntime();
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+  process.env.NEXT_RUNTIME = "nodejs";
+
+  try {
+    const instrumentation = await loadInstrumentation();
+    assert.equal(typeof instrumentation.register, "function");
+    await instrumentation.register?.();
+    assert.equal(existsSync(dataRoot), false);
+    assert.deepEqual(readdirSync(parent), []);
+
+    await withMcpClient(async (client) => {
+      const health = structured<{ ok: true; data: { ok: boolean; state: string } }>(
+        await client.callTool({ name: "health", arguments: {} }),
+      );
+      assert.equal(health.data.ok, true);
+      assert.equal(health.data.state, "uninitialized");
+      assert.deepEqual(structured<{ ok: true; data: { courses: unknown[] } }>(
+        await client.callTool({ name: "list_courses", arguments: {} }),
+      ).data.courses, []);
+
+      const created = structured<{ ok: true; data: { created: boolean } }>(
+        await client.callTool({
+          name: "create_course",
+          arguments: {
+            requestId: crypto.randomUUID(),
+            title: "첫 시작 과정",
+            goal: "비어 있는 저장소를 승인된 쓰기로만 초기화한다.",
+          },
+        }),
+      );
+      assert.equal(created.data.created, true);
+    });
+    assert.equal(existsSync(join(dataRoot, "just-study.sqlite")), true);
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.JUST_STUDY_DATA_DIR;
+    else process.env.JUST_STUDY_DATA_DIR = previousDataRoot;
+    if (previousRuntime === undefined) delete process.env.NEXT_RUNTIME;
+    else process.env.NEXT_RUNTIME = previousRuntime;
+    closeAndClearTestRuntime();
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("startup initializer recovers a WAL store once and pins stable MCP reads", { concurrency: false }, async () => {
+  const sourceRoot = makeDataRoot();
+  const residueRoot = makeDataRoot();
+  const previousDataRoot = process.env.JUST_STUDY_DATA_DIR;
+  const writer = openDatabase(sourceRoot);
+  const course = createCourse(writer, sourceRoot, {
+    requestId: crypto.randomUUID(),
+    title: "재시작 복구 과정",
+    goal: "WAL 저장소가 재시작 후에도 읽혀야 한다.",
+  }).course;
+
+  try {
+    for (const name of ["just-study.sqlite", "just-study.sqlite-wal", "just-study.sqlite-shm"]) {
+      assert.ok(existsSync(join(sourceRoot, name)), `${name} fixture`);
+      copyFileSync(join(sourceRoot, name), join(residueRoot, name));
+    }
+    mkdirSync(join(residueRoot, "courses", course.id), { recursive: true });
+    copyFileSync(
+      join(sourceRoot, course.markdownPath),
+      join(residueRoot, course.markdownPath),
+    );
+    writer.close();
+    closeAndClearTestRuntime();
+    process.env.JUST_STUDY_DATA_DIR = residueRoot;
+
+    const unpinnedBefore = snapshotRootFiles(residueRoot);
+    const unpinnedRuntime = getReadOnlyRuntime();
+    assert.equal(unpinnedRuntime.db, null);
+    unpinnedRuntime.close();
+    assert.deepEqual(snapshotRootFiles(residueRoot), unpinnedBefore);
+
+    const runtime = await loadStartupInitializer();
+    assert.equal(typeof runtime.initializeExistingRuntime, "function");
+    runtime.initializeExistingRuntime?.();
+    const afterStartup = snapshotRootFiles(residueRoot);
+
+    await withMcpClient(async (client) => {
+      const health = structured<{ ok: true; data: { ok: boolean; state: string } }>(
+        await client.callTool({ name: "health", arguments: {} }),
+      );
+      assert.equal(health.data.ok, true);
+      assert.equal(health.data.state, "ready");
+      assert.deepEqual(structured<{ ok: true; data: { courses: { id: string }[] } }>(
+        await client.callTool({ name: "list_courses", arguments: {} }),
+      ).data.courses.map(({ id }) => id), [course.id]);
+      assert.equal(structured<{ ok: true; data: { state: { course: { id: string } } } }>(
+        await client.callTool({ name: "get_learning_state", arguments: { courseId: course.id } }),
+      ).data.state.course.id, course.id);
+      assert.match(structured<{ ok: true; data: { markdown: string } }>(
+        await client.callTool({ name: "read_learning_document", arguments: { courseId: course.id, document: "course" } }),
+      ).data.markdown, /재시작 복구 과정/);
+    });
+    assert.deepEqual(snapshotRootFiles(residueRoot), afterStartup);
+  } finally {
+    if (writer.open) writer.close();
+    if (previousDataRoot === undefined) delete process.env.JUST_STUDY_DATA_DIR;
+    else process.env.JUST_STUDY_DATA_DIR = previousDataRoot;
+    closeAndClearTestRuntime();
+    rmSync(sourceRoot, { recursive: true, force: true });
+    rmSync(residueRoot, { recursive: true, force: true });
+  }
+});
+
+test("startup initialization preserves a corrupt main database as recovery required", { concurrency: false }, async () => {
+  const dataRoot = makeDataRoot();
+  const previousDataRoot = process.env.JUST_STUDY_DATA_DIR;
+  writeFileSync(join(dataRoot, "just-study.sqlite"), "not a SQLite database", "utf8");
+  closeAndClearTestRuntime();
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+
+  try {
+    const before = snapshotRootFiles(dataRoot);
+    const runtime = await loadStartupInitializer();
+    assert.equal(typeof runtime.initializeExistingRuntime, "function");
+    runtime.initializeExistingRuntime?.();
+    assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime?.db, null);
+    assert.deepEqual(snapshotRootFiles(dataRoot), before);
+
+    await withMcpClient(async (client) => {
+      const health = structured<{ ok: true; data: { ok: boolean; state: string; database: string } }>(
+        await client.callTool({ name: "health", arguments: {} }),
+      );
+      assert.equal(health.data.ok, false);
+      assert.equal(health.data.state, "recovery_required");
+      assert.equal(health.data.database, "error");
+    });
+    assert.deepEqual(snapshotRootFiles(dataRoot), before);
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.JUST_STUDY_DATA_DIR;
+    else process.env.JUST_STUDY_DATA_DIR = previousDataRoot;
+    closeAndClearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("repeated Node startup registration is idempotent", { concurrency: false }, async () => {
+  const dataRoot = makeDataRoot();
+  const previousDataRoot = process.env.JUST_STUDY_DATA_DIR;
+  const previousRuntime = process.env.NEXT_RUNTIME;
+  const db = openDatabase(dataRoot);
+  db.close();
+  closeAndClearTestRuntime();
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+  process.env.NEXT_RUNTIME = "nodejs";
+
+  try {
+    const instrumentation = await loadInstrumentation();
+    assert.equal(typeof instrumentation.register, "function");
+    await instrumentation.register?.();
+    const firstRuntime = (globalThis as TestRuntimeGlobal).__justStudyRuntime;
+    assert.ok(firstRuntime?.db);
+    const afterFirstRegistration = snapshotRootFiles(dataRoot);
+
+    await instrumentation.register?.();
+    assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime, firstRuntime);
+    assert.deepEqual(snapshotRootFiles(dataRoot), afterFirstRegistration);
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.JUST_STUDY_DATA_DIR;
+    else process.env.JUST_STUDY_DATA_DIR = previousDataRoot;
+    if (previousRuntime === undefined) delete process.env.NEXT_RUNTIME;
+    else process.env.NEXT_RUNTIME = previousRuntime;
+    closeAndClearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
 
 test("negotiates Streamable HTTP and lists health", { concurrency: false }, async () => {
   const dataRoot = makeDataRoot();
