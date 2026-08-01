@@ -1,5 +1,8 @@
 import { getHealth } from "../../server/health.ts";
-import { getReadOnlyRuntime } from "../../server/runtime.ts";
+import {
+  getReadOnlyRuntime,
+  initializeExistingRuntime,
+} from "../../server/runtime.ts";
 import { Badge, Card } from "../ui/primitives.tsx";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +12,7 @@ function stateLabel(ok: boolean): string {
 }
 
 export default function StatusPage() {
+  initializeExistingRuntime();
   const runtime = getReadOnlyRuntime();
   try {
     const health = getHealth(runtime.db, runtime.dataRoot);

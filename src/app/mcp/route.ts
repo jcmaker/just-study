@@ -1,4 +1,5 @@
 import { mcpHandler } from "../../server/mcp.ts";
+import { initializeExistingRuntime } from "../../server/runtime.ts";
 
 export const MAX_MCP_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -65,6 +66,12 @@ export async function POST(request: Request): Promise<Response> {
       ? errorResponse(413, "MCP request body is too large")
       : errorResponse(400, "MCP request body could not be read");
   }
+  try {
+    JSON.parse(new TextDecoder().decode(body));
+  } catch {
+    return errorResponse(400, "MCP request body must be valid JSON");
+  }
+  initializeExistingRuntime();
   try {
     return await mcpHandler.fetch(new Request(request.url, {
       method: "POST",

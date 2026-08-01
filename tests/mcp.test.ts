@@ -47,6 +47,44 @@ function snapshotRootFiles(dataRoot: string): Record<string, { sha256: string; m
   );
 }
 
+function snapshotTreeFiles(dataRoot: string): Record<string, { sha256: string; mtimeNs: string }> {
+  const snapshot: Record<string, { sha256: string; mtimeNs: string }> = {};
+  const visit = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile()) {
+        const stat = statSync(path, { bigint: true });
+        snapshot[path.slice(dataRoot.length + 1)] = {
+          sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
+          mtimeNs: stat.mtimeNs.toString(),
+        };
+      }
+    }
+  };
+  visit(dataRoot);
+  return snapshot;
+}
+
+function makeWalResidue(title: string): { dataRoot: string; sourceRoot: string } {
+  const sourceRoot = makeDataRoot();
+  const dataRoot = makeDataRoot();
+  const writer = openDatabase(sourceRoot);
+  const course = createCourse(writer, sourceRoot, {
+    requestId: crypto.randomUUID(),
+    title,
+    goal: "유효한 로컬 MCP 읽기가 저장 상태를 복구한다.",
+  }).course;
+
+  for (const name of ["just-study.sqlite", "just-study.sqlite-wal", "just-study.sqlite-shm"]) {
+    copyFileSync(join(sourceRoot, name), join(dataRoot, name));
+  }
+  mkdirSync(join(dataRoot, "courses", course.id), { recursive: true });
+  copyFileSync(join(sourceRoot, course.markdownPath), join(dataRoot, course.markdownPath));
+  writer.close();
+  return { dataRoot, sourceRoot };
+}
+
 test("reads only a named verified learning document", () => {
   const dataRoot = makeDataRoot();
   const db = openDatabase(dataRoot);
@@ -209,6 +247,37 @@ test("rejects malformed JSON before any tool mutation", async () => {
   assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime, undefined);
 });
 
+test("rejected MCP requests leave a closed WAL store uninitialized and unchanged", { concurrency: false }, async () => {
+  const { dataRoot, sourceRoot } = makeWalResidue("Rejected request boundary");
+  const previous = process.env.JUST_STUDY_DATA_DIR;
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+  closeAndClearTestRuntime();
+  const before = snapshotTreeFiles(dataRoot);
+
+  try {
+    const cases = [
+      [403, mcpRequest("{}", { host: "example.com" })],
+      [403, mcpRequest("{}", { origin: "http://evil.test" })],
+      [403, mcpRequest("{}", { "sec-fetch-site": "cross-site" })],
+      [415, mcpRequest("{}", { "content-type": "text/plain" })],
+      [413, mcpRequest("{}", { "content-length": String(8 * 1024 * 1024 + 1) })],
+      [400, mcpRequest("{", { accept: "application/json, text/event-stream" })],
+    ] as const;
+
+    for (const [status, request] of cases) {
+      assert.equal((await mcpRoute.POST(request)).status, status);
+      assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime, undefined);
+      assert.deepEqual(snapshotTreeFiles(dataRoot), before);
+    }
+  } finally {
+    closeAndClearTestRuntime();
+    if (previous === undefined) delete process.env.JUST_STUDY_DATA_DIR;
+    else process.env.JUST_STUDY_DATA_DIR = previous;
+    rmSync(sourceRoot, { recursive: true, force: true });
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("keeps MCP subscriptions disabled", async () => {
   const response = await mcpRoute.POST(mcpRequest(
     JSON.stringify({
@@ -258,6 +327,54 @@ async function withMcpClient<T>(run: (client: Client) => Promise<T>): Promise<T>
     await client.close();
   }
 }
+
+async function withDirectMcpClient<T>(run: (client: Client) => Promise<T>): Promise<T> {
+  const transport = new StreamableHTTPClientTransport(
+    new URL("http://127.0.0.1:3000/mcp"),
+    { fetch: (input, init) => mcpHandler.fetch(new Request(input, init)) },
+  );
+  const client = new Client(
+    { name: "just-study-direct-test", version: "1.0.0" },
+    { versionNegotiation: { mode: "auto" } },
+  );
+  await client.connect(transport);
+  try {
+    return await run(client);
+  } finally {
+    await client.close();
+  }
+}
+
+test("valid local MCP reads initialize a closed WAL store once", { concurrency: false }, async () => {
+  const { dataRoot, sourceRoot } = makeWalResidue("MCP warm worker");
+  const previous = process.env.JUST_STUDY_DATA_DIR;
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+  closeAndClearTestRuntime();
+
+  try {
+    await withMcpClient(async (client) => {
+      const first = structured<{ ok: true; data: { ok: boolean; state: string } }>(
+        await client.callTool({ name: "health", arguments: {} }),
+      );
+      assert.equal(first.data.ok, true);
+      assert.equal(first.data.state, "ready");
+      assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime?.db?.open, true);
+
+      const afterFirst = snapshotTreeFiles(dataRoot);
+      const second = structured<{ ok: true; data: { ok: boolean; state: string } }>(
+        await client.callTool({ name: "health", arguments: {} }),
+      );
+      assert.equal(second.data.state, "ready");
+      assert.deepEqual(snapshotTreeFiles(dataRoot), afterFirst);
+    });
+  } finally {
+    closeAndClearTestRuntime();
+    if (previous === undefined) delete process.env.JUST_STUDY_DATA_DIR;
+    else process.env.JUST_STUDY_DATA_DIR = previous;
+    rmSync(sourceRoot, { recursive: true, force: true });
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
 
 test("startup registration leaves an empty root uninitialized until create_course", { concurrency: false }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "just-study-mcp-startup-empty-"));
@@ -603,7 +720,7 @@ test("every read-only tool leaves a closed WAL store's files unchanged", { concu
     const before = readdirSync(dataRoot).sort();
 
     try {
-      await withMcpClient(async (client) => {
+      await withDirectMcpClient(async (client) => {
         const result = await client.callTool({ name, arguments: argumentsForTool });
         assert.equal(result.isError, undefined, name);
       });
@@ -643,7 +760,7 @@ test("unpinned WAL sidecars fail closed without changing file names, hashes, or 
       "just-study.sqlite-wal",
     ]);
 
-    await withMcpClient(async (client) => {
+    await withDirectMcpClient(async (client) => {
       for (const [name, arguments_] of [
         ["health", {}],
         ["list_courses", {}],
@@ -723,11 +840,11 @@ test("health inspects an existing store without weakening its recovery inventory
       assert.deepEqual(health.data.corruptCourseIds, [course.id]);
       assert.deepEqual(health.data.temporaryEntries, ["unfinished-recovery"]);
     });
-    assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime, undefined);
+    assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime?.db?.open, true);
   } finally {
     if (previousDataRoot === undefined) delete process.env.JUST_STUDY_DATA_DIR;
     else process.env.JUST_STUDY_DATA_DIR = previousDataRoot;
-    clearTestRuntime();
+    closeAndClearTestRuntime();
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });

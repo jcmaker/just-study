@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -1013,6 +1016,58 @@ function restoreDataRootEnvironment(previous: string | undefined): void {
   }
 }
 
+function closeAndClearTestRuntime(): void {
+  const runtime = (globalThis as TestRuntimeGlobal).__justStudyRuntime;
+  if (runtime?.db?.open) runtime.db.close();
+  clearTestRuntime();
+}
+
+function makeWalResidue(title: string): {
+  dataRoot: string;
+  sourceRoot: string;
+} {
+  const sourceRoot = makeDataRoot();
+  const dataRoot = makeDataRoot();
+  const writer = openDatabase(sourceRoot);
+  const course = createCourse(writer, sourceRoot, {
+    requestId: crypto.randomUUID(),
+    title,
+    goal: "재시작 뒤에도 저장된 과정을 안전하게 읽는다.",
+  }).course;
+
+  for (const name of ["just-study.sqlite", "just-study.sqlite-wal", "just-study.sqlite-shm"]) {
+    copyFileSync(join(sourceRoot, name), join(dataRoot, name));
+  }
+  mkdirSync(join(dataRoot, "courses", course.id), { recursive: true });
+  copyFileSync(
+    join(sourceRoot, course.markdownPath),
+    join(dataRoot, course.markdownPath),
+  );
+  writer.close();
+  return { dataRoot, sourceRoot };
+}
+
+function snapshotTreeFiles(dataRoot: string): Record<string, { sha256: string; mtimeNs: string }> {
+  const snapshot: Record<string, { sha256: string; mtimeNs: string }> = {};
+  const visit = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(path);
+      } else if (entry.isFile()) {
+        const relative = path.slice(dataRoot.length + 1);
+        const stat = statSync(path, { bigint: true });
+        snapshot[relative] = {
+          sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
+          mtimeNs: stat.mtimeNs.toString(),
+        };
+      }
+    }
+  };
+  visit(dataRoot);
+  return snapshot;
+}
+
 test("keeps one hot-reload-safe runtime for the configured data root", () => {
   const dataRoot = makeDataRoot();
   const previous = process.env.JUST_STUDY_DATA_DIR;
@@ -1083,6 +1138,81 @@ test("health route returns 200 for healthy runtime", async () => {
     db.close();
     clearTestRuntime();
     rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("health route initializes a closed WAL store once and keeps later reads stable", async () => {
+  const { dataRoot, sourceRoot } = makeWalResidue("Health warm worker");
+  const previous = process.env.JUST_STUDY_DATA_DIR;
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+  closeAndClearTestRuntime();
+
+  try {
+    const first = getHealthRoute();
+    const firstBody = await first.json() as { ok: boolean; state: string };
+    assert.equal(first.status, 200);
+    assert.equal(firstBody.ok, true);
+    assert.equal(firstBody.state, "ready");
+    assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime?.db?.open, true);
+
+    const afterFirst = snapshotTreeFiles(dataRoot);
+    const second = getHealthRoute();
+    assert.equal(second.status, 200);
+    assert.deepEqual(snapshotTreeFiles(dataRoot), afterFirst);
+  } finally {
+    closeAndClearTestRuntime();
+    restoreDataRootEnvironment(previous);
+    rmSync(sourceRoot, { recursive: true, force: true });
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("health route leaves an empty root uninitialized and file-free", async () => {
+  const dataRoot = makeDataRoot();
+  const previous = process.env.JUST_STUDY_DATA_DIR;
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+  closeAndClearTestRuntime();
+
+  try {
+    for (let call = 0; call < 2; call += 1) {
+      const response = getHealthRoute();
+      const body = await response.json() as { state: string };
+      assert.equal(response.status, 200);
+      assert.equal(body.state, "uninitialized");
+      assert.deepEqual(readdirSync(dataRoot), []);
+      assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime, undefined);
+    }
+  } finally {
+    closeAndClearTestRuntime();
+    restoreDataRootEnvironment(previous);
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("health route preserves corrupt and sidecar-only recovery stores", async () => {
+  for (const [name, seed] of [
+    ["corrupt-main", ["just-study.sqlite", "not a SQLite database"]],
+    ["sidecar-only", ["just-study.sqlite-wal", "recovery residue"]],
+  ] as const) {
+    const dataRoot = makeDataRoot();
+    const previous = process.env.JUST_STUDY_DATA_DIR;
+    writeFileSync(join(dataRoot, seed[0]), seed[1], "utf8");
+    const before = snapshotTreeFiles(dataRoot);
+    process.env.JUST_STUDY_DATA_DIR = dataRoot;
+    closeAndClearTestRuntime();
+
+    try {
+      const response = getHealthRoute();
+      const body = await response.json() as { state: string; database: string };
+      assert.equal(response.status, 503, name);
+      assert.equal(body.state, "recovery_required", name);
+      assert.equal(body.database, "error", name);
+      assert.deepEqual(snapshotTreeFiles(dataRoot), before, name);
+    } finally {
+      closeAndClearTestRuntime();
+      restoreDataRootEnvironment(previous);
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1897,6 +2027,30 @@ test("UI status renders an uninitialized schema as initialization pending", asyn
     assert.equal(html.includes("읽기 실패"), false);
   } finally {
     clearTestRuntime();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("UI status initializes a closed WAL store once and keeps later renders stable", async () => {
+  const { default: StatusPage } = await import("../src/app/status/page.tsx");
+  const { dataRoot, sourceRoot } = makeWalResidue("Status warm worker");
+  const previous = process.env.JUST_STUDY_DATA_DIR;
+  process.env.JUST_STUDY_DATA_DIR = dataRoot;
+  closeAndClearTestRuntime();
+
+  try {
+    const first = renderToStaticMarkup(createElement(StatusPage));
+    assert.match(first, /시스템이 정상입니다/);
+    assert.equal((globalThis as TestRuntimeGlobal).__justStudyRuntime?.db?.open, true);
+
+    const afterFirst = snapshotTreeFiles(dataRoot);
+    const second = renderToStaticMarkup(createElement(StatusPage));
+    assert.match(second, /시스템이 정상입니다/);
+    assert.deepEqual(snapshotTreeFiles(dataRoot), afterFirst);
+  } finally {
+    closeAndClearTestRuntime();
+    restoreDataRootEnvironment(previous);
+    rmSync(sourceRoot, { recursive: true, force: true });
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
