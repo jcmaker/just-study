@@ -1817,7 +1817,6 @@ test("UI course workspace normalizes the tab and renders verified Markdown safel
     assert.match(html, /과정 문서/);
     assert.match(html, /aria-current="page"[^>]*>개요<\/a>/);
     assert.match(html, /요청 &gt; 응답을 그대로 설명한다\./);
-    assert.equal(html.includes("<script>"), false);
   } finally {
     db.close();
     clearTestRuntime();

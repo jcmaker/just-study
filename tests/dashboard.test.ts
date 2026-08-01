@@ -6,9 +6,14 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import ts from "typescript";
 
 import {
   CourseValidationError,
@@ -67,6 +72,30 @@ import {
   reflectionErrorMessage as reflectionErrorMessageForTest,
 } from "../src/app/error-messages.ts";
 import { updateCourseDraftAction } from "../src/app/actions.ts";
+
+registerHooks({
+  load(url, context, nextLoad) {
+    if (url.endsWith(".css")) {
+      return { format: "module", shortCircuit: true, source: "" };
+    }
+
+    if (url.endsWith(".tsx")) {
+      return {
+        format: "module",
+        shortCircuit: true,
+        source: ts.transpileModule(readFileSync(new URL(url), "utf8"), {
+          compilerOptions: {
+            jsx: ts.JsxEmit.ReactJSX,
+            module: ts.ModuleKind.ESNext,
+            target: ts.ScriptTarget.ES2022,
+          },
+        }).outputText,
+      };
+    }
+
+    return nextLoad(url, context);
+  },
+});
 
 function makeDataRoot(): string {
   return mkdtempSync(join(tmpdir(), "just-study-dashboard-"));
@@ -1131,6 +1160,153 @@ test("actions never surface raw engine English to the user", () => {
     ),
     "과정 제목은 줄바꿈 없이 1~120자여야 합니다.",
   );
+});
+
+test("draft form constrains fields and preserves submitted values across outcomes", async () => {
+  const { DraftFormView } = await import("../src/app/draft-form.tsx");
+  const renderForm = (
+    state: {
+      status: "idle" | "saved" | "error" | "conflict";
+      message: string | null;
+      title: string;
+      goal: string;
+    },
+    revision = 3,
+    serverValues = { title: "서버 제목", goal: "서버 목표" },
+  ) =>
+    renderToStaticMarkup(
+      createElement(DraftFormView, {
+        action: "/courses/draft",
+        courseId: "course-draft",
+        revision,
+        title: serverValues.title,
+        goal: serverValues.goal,
+        state,
+        pending: false,
+        onRefresh() {},
+      }),
+    );
+
+  const idle = renderForm({
+    status: "idle",
+    message: null,
+    title: "",
+    goal: "",
+  });
+  assert.match(idle, /name="courseId" value="course-draft"/);
+  assert.match(idle, /name="expectedRevision" value="3"/);
+  const titleInput = idle.match(/<input[^>]*id="draft-title"[^>]*>/)?.[0];
+  assert.ok(titleInput);
+  for (const attribute of [
+    /name="title"/,
+    /value="서버 제목"/,
+    /required=""/,
+    /minLength="1"/,
+    /maxLength="120"/,
+    /aria-describedby="draft-title-help"/,
+    /class="[^"]*tap-target[^"]*"/,
+  ]) {
+    assert.match(titleInput, attribute);
+  }
+  const goalInput = idle.match(/<textarea[^>]*id="draft-goal"[^>]*>서버 목표<\/textarea>/)?.[0];
+  assert.ok(goalInput);
+  for (const attribute of [
+    /name="goal"/,
+    /required=""/,
+    /minLength="1"/,
+    /maxLength="2000"/,
+    /rows="5"/,
+    /aria-describedby="draft-goal-help"/,
+  ]) {
+    assert.match(goalInput, attribute);
+  }
+  assert.match(idle, /<label[^>]*for="draft-title"[^>]*>과정 제목<\/label>/);
+  assert.match(idle, /<label[^>]*for="draft-goal"[^>]*>학습 목표<\/label>/);
+
+  const error = renderForm({
+    status: "error",
+    message: "저장하지 못했습니다.",
+    title: "입력 중인 제목",
+    goal: "입력 중인 목표",
+  });
+  assert.match(error, /value="입력 중인 제목"/);
+  assert.match(error, />입력 중인 목표<\/textarea>/);
+  assert.match(error, /role="alert"[^>]*>저장하지 못했습니다\.<\/p>/);
+
+  const conflict = renderForm({
+    status: "conflict",
+    message: "최신 상태와 충돌했습니다.",
+    title: "보존할 제목",
+    goal: "보존할 목표",
+  });
+  assert.match(conflict, /value="보존할 제목"/);
+  assert.match(conflict, />보존할 목표<\/textarea>/);
+  assert.match(conflict, /role="alert"/);
+  assert.match(conflict, /최신 상태와 충돌했습니다\./);
+  assert.match(
+    conflict,
+    /<button[^>]*type="button"[^>]*class="[^"]*tap-target[^"]*"[^>]*>최신 상태 불러오기<\/button>/,
+  );
+
+  const revalidated = renderForm(
+    {
+      status: "saved",
+      message: "과정 정보를 저장했습니다.",
+      title: "정규화 전 제출 제목",
+      goal: "정규화 전 제출 목표",
+    },
+    4,
+    { title: "최신 서버 제목", goal: "최신 서버 목표" },
+  );
+  assert.match(revalidated, /name="expectedRevision" value="4"/);
+  assert.match(revalidated, /value="최신 서버 제목"/);
+  assert.match(revalidated, />최신 서버 목표<\/textarea>/);
+  assert.doesNotMatch(revalidated, /정규화 전 제출/);
+  assert.match(revalidated, /aria-live="polite"/);
+});
+
+test("course overview mounts the draft editor only while the course is a draft", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    __justStudyRuntime?: { dataRoot: string; db: DatabaseHandle | null };
+  };
+  const previousRuntime = runtimeGlobal.__justStudyRuntime;
+  runtimeGlobal.__justStudyRuntime = { dataRoot, db };
+
+  try {
+    const { default: CoursePage } = await import(
+      "../src/app/courses/[id]/page.tsx"
+    );
+    const course = createCourse(db, dataRoot, {
+      requestId: crypto.randomUUID(),
+      title: "수정 가능한 초안",
+      goal: "초안 편집기 노출 확인",
+    }).course;
+    const renderCourse = async (tab = "overview") => {
+      const page = await CoursePage({
+        params: Promise.resolve({ id: course.id }),
+        searchParams: Promise.resolve({ tab }),
+      });
+      return renderToStaticMarkup(page);
+    };
+
+    const draftOverview = await renderCourse();
+    assert.match(draftOverview, /과정 정보 수정/);
+    assert.match(draftOverview, /name="expectedRevision" value="0"/);
+    assert.doesNotMatch(await renderCourse("plan"), /과정 정보 수정/);
+
+    db.prepare("UPDATE courses SET status = 'active' WHERE id = ?").run(course.id);
+    assert.doesNotMatch(await renderCourse(), /과정 정보 수정/);
+
+    db.prepare("UPDATE courses SET status = 'completed' WHERE id = ?").run(course.id);
+    assert.doesNotMatch(await renderCourse(), /과정 정보 수정/);
+  } finally {
+    db.close();
+    if (previousRuntime === undefined) delete runtimeGlobal.__justStudyRuntime;
+    else runtimeGlobal.__justStudyRuntime = previousRuntime;
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
 });
 
 test("modules reachable from client components import no server-only code", () => {

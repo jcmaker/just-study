@@ -18,6 +18,7 @@ import {
 import { getRuntime, requireDatabase } from "../../../server/runtime.ts";
 import { StorageError } from "../../../server/storage.ts";
 import { CopyCommand } from "../../copy-command.tsx";
+import { DraftForm } from "../../draft-form.tsx";
 import { Alert, Badge, ProgressBar } from "../../ui/primitives.tsx";
 import { CourseContextBar } from "./context-bar.tsx";
 import {
@@ -152,7 +153,25 @@ export default async function CoursePage({
 
       <CourseTabStrip courseId={course.id} active={tab} />
 
-      {tab === "overview" ? <OverviewPanel course={course} history={history} snapshot={snapshot} verified={verified} unavailable={stateError} /> : null}
+      {tab === "overview" ? (
+        <OverviewPanel
+          course={course}
+          history={history}
+          snapshot={snapshot}
+          verified={verified}
+          unavailable={stateError}
+          editor={
+            course.status === "draft" ? (
+              <DraftForm
+                courseId={course.id}
+                revision={course.revision}
+                title={course.title}
+                goal={course.goal}
+              />
+            ) : undefined
+          }
+        />
+      ) : null}
       {tab === "plan" ? <PlanPanel history={history} currentDayId={course.currentDayId} /> : null}
       {tab === "today" ? <TodayPanel course={course} history={history} snapshot={snapshot} verified={verified} unavailable={stateError} /> : null}
       {tab === "sources" ? <SourcesPanel history={history} /> : null}

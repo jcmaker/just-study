@@ -1,4 +1,5 @@
 import Link from "next/link.js";
+import type { ReactNode } from "react";
 
 import {
   COURSE_TABS,
@@ -99,12 +100,13 @@ export function DocumentPanel({
   return <Card><MarkdownView markdown={markdown!} /></Card>;
 }
 
-export function OverviewPanel({ course, history, snapshot, verified, unavailable }: {
+export function OverviewPanel({ course, history, snapshot, verified, unavailable, editor }: {
   course: CourseHistoryCourse;
   history: CourseHistory;
   snapshot: LearningSnapshot | null;
   verified: boolean;
   unavailable: boolean;
+  editor?: ReactNode;
 }) {
   const preference = { examples: "예제 중심", theory: "이론 중심", practice: "실습 중심" } as const;
   const events = [
@@ -123,6 +125,16 @@ export function OverviewPanel({ course, history, snapshot, verified, unavailable
         <CardHeader title="학습 목표" headingLevel={3} />
         <p className="m-0 break-words">{course.goal}</p>
       </Card>
+      {editor ? (
+        <Card>
+          <CardHeader
+            title="과정 정보 수정"
+            description="목차를 승인하기 전인 초안에서만 제목과 목표를 바꿀 수 있습니다."
+            headingLevel={3}
+          />
+          {editor}
+        </Card>
+      ) : null}
       <Card>
         <CardHeader title="시작 인터뷰" headingLevel={3} />
         <dl className="m-0 grid gap-2">
