@@ -5586,7 +5586,7 @@ Require the reviewer to check specifically:
 
 - No screen derives status, progress, source scores, or quiz results from Markdown.
 - Every write passes `expectedRevision`; no conflict is retried or overwritten; no partial SQLite/Markdown state is possible.
-- The only writable values are the four approved ones.
+- The only writable values are the five approved ones (new course, draft title/goal, an unanswered quiz choice, an unsubmitted reflection, theme). ERRATUM 2026-08-02: the quiz choice was added when the daily quiz became multiple choice; the server grades it from the stored answer key, so no client can set a result.
 - No raw HTML rendering, no unverified document rendered, no error converted to an empty state.
 - No absolute path, checksum, SQL, or stack trace reaches the UI.
 - No Phase 5 placeholder, empty menu, unused table, pomodoro artifact, or weekly-status widget exists.

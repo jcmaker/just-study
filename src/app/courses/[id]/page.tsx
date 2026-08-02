@@ -1,5 +1,6 @@
 import Link from "next/link.js";
 import { notFound } from "next/navigation.js";
+import type { ReactNode } from "react";
 
 import {
   courseCardModel,
@@ -19,6 +20,7 @@ import { getRuntime, requireDatabase } from "../../../server/runtime.ts";
 import { StorageError } from "../../../server/storage.ts";
 import { CopyCommand } from "../../copy-command.tsx";
 import { DraftForm } from "../../draft-form.tsx";
+import { QuizForm } from "../../quiz-form.tsx";
 import { ReflectionForm } from "../../reflection-form.tsx";
 import { Alert, Badge, ProgressBar } from "../../ui/primitives.tsx";
 import { CourseContextBar } from "./context-bar.tsx";
@@ -181,6 +183,26 @@ export default async function CoursePage({
           snapshot={snapshot}
           verified={verified}
           unavailable={stateError}
+          quiz={((): ReactNode => {
+            if (course.currentStage !== "quiz") return undefined;
+            const attempt = history.quizAttempts.at(-1);
+            if (!attempt || attempt.status !== "in_progress") return undefined;
+            const question = attempt.questions.find(({ response }) => response === null);
+            if (!question) return undefined;
+            return (
+              <QuizForm
+                courseId={course.id}
+                revision={course.revision}
+                attemptId={attempt.id}
+                question={{
+                  id: question.id,
+                  position: question.position,
+                  prompt: question.prompt,
+                  choices: question.choices,
+                }}
+              />
+            );
+          })()}
           reflection={
             course.currentStage === "reflection" ? (
               <ReflectionForm courseId={course.id} revision={course.revision} />

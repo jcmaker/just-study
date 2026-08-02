@@ -27,3 +27,15 @@ export const initialReflectionState: ReflectionState = {
   confusing: "",
   feeling: "",
 };
+
+export type QuizAnswerState = {
+  status: "idle" | "saved" | "error" | "conflict";
+  message: string | null;
+  selectedChoiceIndex: number | null;
+};
+
+export const initialQuizAnswerState: QuizAnswerState = {
+  status: "idle",
+  message: null,
+  selectedChoiceIndex: null,
+};

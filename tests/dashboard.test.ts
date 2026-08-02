@@ -73,6 +73,7 @@ import {
   reflectionErrorMessage as reflectionErrorMessageForTest,
 } from "../src/app/error-messages.ts";
 import {
+  submitQuizAnswerAction,
   submitReflectionAction,
   updateCourseDraftAction,
 } from "../src/app/actions.ts";
@@ -1805,5 +1806,181 @@ test("route loading boundaries announce progress without leaking content", async
   } finally {
     if (hadRuntime) runtimeGlobal.__justStudyRuntime = previousRuntime;
     else delete runtimeGlobal.__justStudyRuntime;
+  }
+});
+
+function reachQuiz(db: DatabaseHandle, dataRoot: string, title: string, prefix: string) {
+  const approved = approve(db, dataRoot, title, [
+    `https://${prefix}.example.edu/a`,
+    `https://${prefix}.example.org/b`,
+  ]);
+  const courseId = approved.course.id;
+  let state = recordDailyResearch(db, dataRoot, {
+    courseId,
+    expectedRevision: approved.course.revision,
+    research: research(prefix, [`https://${prefix}-d.example.edu/a`, `https://${prefix}-d.example.org/b`]),
+  });
+  state = saveLearningCheckpoint(db, dataRoot, {
+    courseId,
+    expectedRevision: state.course.revision,
+    lesson,
+    understoodConcepts: [{ key: `${prefix}-known`, label: `${prefix} 이해 개념` }],
+    remediationConcepts: [],
+  });
+  const list = questions(prefix);
+  state = startQuiz(db, dataRoot, { courseId, expectedRevision: state.course.revision, questions: list });
+  return { courseId, state, list };
+}
+
+test("quiz form shows the saved choices without leaking the answer key", async () => {
+  const { QuizFormView } = await import("../src/app/quiz-form.tsx");
+  const question = {
+    id: "11111111-1111-4111-8111-111111111111",
+    position: 2,
+    prompt: "문맥 교환 비용이 큰 이유는 무엇인가?",
+    choices: ["레지스터와 캐시 상태를 저장하고 복원해야 한다", "디스크를 매번 포맷한다", "네트워크를 재연결한다", "화면을 다시 그린다"],
+  };
+  const render = (state: {
+    status: "idle" | "saved" | "error" | "conflict";
+    message: string | null;
+    selectedChoiceIndex: number | null;
+  }, pending = false) =>
+    renderToStaticMarkup(
+      createElement(QuizFormView, {
+        action: "/courses/quiz",
+        attemptId: "22222222-2222-4222-8222-222222222222",
+        courseId: "33333333-3333-4333-8333-333333333333",
+        question,
+        revision: 7,
+        state,
+        pending,
+        onRefresh() {},
+      }),
+    );
+
+  const idle = render({ status: "idle", message: null, selectedChoiceIndex: null });
+  assert.match(idle, /name="courseId" value="33333333-3333-4333-8333-333333333333"/);
+  assert.match(idle, /name="attemptId" value="22222222-2222-4222-8222-222222222222"/);
+  assert.match(idle, /name="questionId" value="11111111-1111-4111-8111-111111111111"/);
+  assert.match(idle, /name="expectedRevision" value="7"/);
+
+  // 네 보기가 저장된 순서 그대로 나오고 값이 0..3 이어야 한다.
+  for (const [index, choice] of question.choices.entries()) {
+    assert.ok(idle.includes(choice), choice);
+    assert.match(idle, new RegExp(`name="selectedChoiceIndex" value="${index}"`));
+  }
+  assert.equal((idle.match(/type="radio"/g) ?? []).length, 4);
+  // 정답 인덱스는 폼에 전달되지 않으므로 어떤 보기도 정답으로 표시되지 않는다.
+  assert.doesNotMatch(idle, /정답/);
+  assert.doesNotMatch(idle, /correctChoiceIndex/);
+  assert.doesNotMatch(idle, /checked/);
+  assert.match(idle, /<p[^>]*aria-live="polite"[^>]*><\/p>/);
+
+  // 속성 순서에 기대지 않도록 해당 라디오 태그만 뽑아 검사한다.
+  const radioAt = (html: string, index: number) =>
+    html.match(new RegExp(`<input[^>]*id="quiz-choice-${index}"[^>]*>`))?.[0] ?? "";
+
+  const error = render({ status: "error", message: "보기 중 하나를 선택한 뒤 제출해 주세요.", selectedChoiceIndex: 2 });
+  assert.match(error, /role="alert"[^>]*>보기 중 하나를 선택한 뒤 제출해 주세요\.<\/p>/);
+  assert.match(radioAt(error, 2), /checked=""/);
+  assert.doesNotMatch(radioAt(error, 0), /checked=""/);
+
+  const conflict = render({ status: "conflict", message: "학습 상태가 먼저 변경됐습니다.", selectedChoiceIndex: 0 });
+  assert.match(conflict, /최신 상태 불러오기/);
+  assert.match(radioAt(conflict, 0), /checked=""/);
+  assert.doesNotMatch(radioAt(conflict, 3), /checked=""/);
+
+  const saved = render({ status: "saved", message: "답안을 저장했습니다.", selectedChoiceIndex: null });
+  assert.match(saved, /aria-live="polite"[^>]*>답안을 저장했습니다\.<\/p>/);
+  assert.doesNotMatch(saved, /checked/);
+
+  const pendingRender = render({ status: "idle", message: null, selectedChoiceIndex: null }, true);
+  assert.match(pendingRender, /disabled=""/);
+  assert.match(pendingRender, /제출 중…/);
+});
+
+test("the today tab mounts the quiz form only during the quiz stage and never sends the answer key", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    __justStudyRuntime?: { dataRoot: string; db: DatabaseHandle | null };
+  };
+  const previousRuntime = runtimeGlobal.__justStudyRuntime;
+  runtimeGlobal.__justStudyRuntime = { dataRoot, db };
+
+  try {
+    const { default: CoursePage } = await import("../src/app/courses/[id]/page.tsx");
+    const renderToday = async (id: string) =>
+      renderToStaticMarkup(
+        await CoursePage({
+          params: Promise.resolve({ id }),
+          searchParams: Promise.resolve({ tab: "today" }),
+        }),
+      );
+
+    const lectureCourse = approve(db, dataRoot, "강의 단계", [
+      "https://ql.example.edu/a",
+      "https://ql.example.org/b",
+    ]).course;
+    const lectureToday = await renderToday(lectureCourse.id);
+    assert.doesNotMatch(lectureToday, /오늘의 퀴즈/);
+    assert.doesNotMatch(lectureToday, /name="selectedChoiceIndex"/);
+
+    const { courseId, list } = reachQuiz(db, dataRoot, "퀴즈 단계", "quiz-stage");
+    const quizToday = await renderToday(courseId);
+    assert.match(quizToday, /오늘의 퀴즈/);
+    assert.match(quizToday, /name="selectedChoiceIndex"/);
+    assert.match(quizToday, /답안 제출/);
+
+    // 첫 번째 미응답 문항만 나오고, 저장된 정답은 절대 실려 나가지 않는다.
+    assert.ok(quizToday.includes(list[0]!.prompt));
+    assert.equal(quizToday.includes(list[1]!.prompt), false);
+    for (const choice of list[0]!.choices) assert.ok(quizToday.includes(choice), choice);
+    assert.doesNotMatch(quizToday, /correctChoiceIndex/);
+    assert.equal((quizToday.match(/type="radio"/g) ?? []).length, 4);
+  } finally {
+    db.close();
+    if (previousRuntime === undefined) delete runtimeGlobal.__justStudyRuntime;
+    else runtimeGlobal.__justStudyRuntime = previousRuntime;
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("a quiz action rejects missing or blank revisions without recording an answer", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    __justStudyRuntime?: { dataRoot: string; db: DatabaseHandle | null };
+  };
+  const previousRuntime = runtimeGlobal.__justStudyRuntime;
+  runtimeGlobal.__justStudyRuntime = { dataRoot, db };
+
+  try {
+    const { courseId, state, list } = reachQuiz(db, dataRoot, "퀴즈 리비전", "quiz-revision");
+    const attemptId = state.quizAttempts.at(-1)!.id;
+    const before = getCourseHistory(db, courseId)!;
+
+    for (const rawRevision of [null, "", "   ", "정수아님"] as const) {
+      const formData = new FormData();
+      formData.set("courseId", courseId);
+      formData.set("attemptId", attemptId);
+      formData.set("questionId", list[0]!.id);
+      formData.set("selectedChoiceIndex", String(list[0]!.correctChoiceIndex));
+      if (rawRevision !== null) formData.set("expectedRevision", rawRevision);
+
+      const result = await submitQuizAnswerAction({} as never, formData);
+      const label = JSON.stringify(rawRevision);
+
+      assert.equal(result.status, "error", label);
+      const unchanged = getCourseHistory(db, courseId)!;
+      assert.equal(unchanged.course.revision, before.course.revision, label);
+      assert.equal(unchanged.course.currentStage, "quiz", label);
+      assert.ok(unchanged.quizAttempts.at(-1)!.questions.every(({ response }) => response === null), label);
+    }
+  } finally {
+    db.close();
+    if (previousRuntime === undefined) delete runtimeGlobal.__justStudyRuntime;
+    else runtimeGlobal.__justStudyRuntime = previousRuntime;
+    rmSync(dataRoot, { recursive: true, force: true });
   }
 });

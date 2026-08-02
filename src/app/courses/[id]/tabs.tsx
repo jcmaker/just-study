@@ -364,12 +364,13 @@ export function QuizPanel({ history }: { history: CourseHistory }) {
   );
 }
 
-export function TodayPanel({ course, history, snapshot, verified, unavailable, reflection }: {
+export function TodayPanel({ course, history, snapshot, verified, unavailable, quiz, reflection }: {
   course: CourseHistoryCourse;
   history: CourseHistory;
   snapshot: LearningSnapshot | null;
   verified: boolean;
   unavailable: boolean;
+  quiz?: ReactNode;
   reflection?: ReactNode;
 }) {
   const currentDay = snapshot?.currentDay ?? history.days.find(({ id }) => id === course.currentDayId) ?? null;
@@ -383,6 +384,15 @@ export function TodayPanel({ course, history, snapshot, verified, unavailable, r
           </p>
           <p className="mt-2 mb-0 text-sm text-muted-foreground">단계: {course.currentStage === null ? "없음" : STAGE_LABELS[course.currentStage]}</p>
         </Card>
+        {quiz ? (
+          <Card>
+            <h3 className="mt-0 mb-2 text-base font-bold">오늘의 퀴즈</h3>
+            <p className="mt-0 mb-3 text-sm text-muted-foreground">
+              다섯 문제를 모두 맞히면 회고로 넘어갑니다. 하나라도 틀리면 보완 학습을 거칩니다.
+            </p>
+            {quiz}
+          </Card>
+        ) : null}
         {reflection ? (
           <Card>
             <h3 className="mt-0 mb-2 text-base font-bold">오늘의 회고</h3>

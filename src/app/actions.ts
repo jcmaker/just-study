@@ -8,14 +8,15 @@ import {
   createCourse,
 } from "../server/courses.ts";
 import {
+  answerQuiz,
   completeDay,
   LearningRevisionConflictError,
   updateCourseDraft,
 } from "../server/learning.ts";
 import { getRuntime, requireDatabase } from "../server/runtime.ts";
 
-import type { DraftEditState, ReflectionState } from "./action-state.ts";
-import { draftErrorMessage, reflectionErrorMessage } from "./error-messages.ts";
+import type { DraftEditState, QuizAnswerState, ReflectionState } from "./action-state.ts";
+import { draftErrorMessage, quizErrorMessage, reflectionErrorMessage } from "./error-messages.ts";
 
 function readExpectedRevision(formData: FormData): number {
   const raw = formData.get("expectedRevision");
@@ -83,6 +84,46 @@ export async function updateCourseDraftAction(
   revalidatePath("/courses");
   revalidatePath("/");
   return { status: "saved", message: "과정 정보를 저장했습니다.", title, goal };
+}
+
+export async function submitQuizAnswerAction(
+  _previous: QuizAnswerState,
+  formData: FormData,
+): Promise<QuizAnswerState> {
+  const courseId = String(formData.get("courseId") ?? "");
+  const attemptId = String(formData.get("attemptId") ?? "");
+  const questionId = String(formData.get("questionId") ?? "");
+  const expectedRevision = readExpectedRevision(formData);
+  const rawChoice = formData.get("selectedChoiceIndex");
+  const selectedChoiceIndex =
+    typeof rawChoice === "string" && rawChoice.trim() !== "" ? Number(rawChoice) : Number.NaN;
+  const kept = Number.isInteger(selectedChoiceIndex) ? selectedChoiceIndex : null;
+
+  try {
+    const runtime = getRuntime();
+    // 정답 판정은 서버가 한다. 이 액션은 고른 번호만 전달한다.
+    answerQuiz(requireDatabase(runtime), runtime.dataRoot, {
+      courseId,
+      expectedRevision,
+      attemptId,
+      answers: [{ questionId, selectedChoiceIndex }],
+    });
+  } catch (error) {
+    if (error instanceof LearningRevisionConflictError) {
+      return {
+        status: "conflict",
+        message:
+          "학습 상태가 먼저 변경됐습니다. 최신 상태를 불러온 뒤 다시 답해 주세요.",
+        selectedChoiceIndex: kept,
+      };
+    }
+    return { status: "error", message: quizErrorMessage(error), selectedChoiceIndex: kept };
+  }
+
+  revalidatePath(`/courses/${courseId}`);
+  revalidatePath("/courses");
+  revalidatePath("/");
+  return { status: "saved", message: "답안을 저장했습니다.", selectedChoiceIndex: null };
 }
 
 export async function submitReflectionAction(
