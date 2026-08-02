@@ -1645,7 +1645,7 @@ git commit -m "feat: expose mastery-gated MCP learning"
 Run from the worktree root:
 
 ```bash
-python3 /Users/justin/.codex/skills/.system/skill-creator/scripts/init_skill.py just-study --path .agents/skills --interface 'display_name=Just Study' --interface 'short_description=검증된 30일 학습 과정을 안전하게 만들고 이어갑니다' --interface 'default_prompt=Use $just-study to create or continue a researched 30-day learning course.'
+python3 ~/.codex/skills/.system/skill-creator/scripts/init_skill.py just-study --path .agents/skills --interface 'display_name=Just Study' --interface 'short_description=검증된 30일 학습 과정을 안전하게 만들고 이어갑니다' --interface 'default_prompt=Use $just-study to create or continue a researched 30-day learning course.'
 ```
 
 Expected: only `.agents/skills/just-study/SKILL.md` and `.agents/skills/just-study/agents/openai.yaml` are created. Do not request `scripts`, `references`, `assets`, or examples.
@@ -1826,7 +1826,7 @@ Run:
 
 ```bash
 node --test tests/codex-skill.test.ts
-python3 /Users/justin/.codex/skills/.system/skill-creator/scripts/quick_validate.py .agents/skills/just-study
+python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py .agents/skills/just-study
 npm test
 npm run lint
 npx tsc --noEmit
