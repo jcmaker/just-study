@@ -206,6 +206,23 @@ npm run build
 
 Dependencies stay minimal. No ORM, no state management library, no test framework, no chart or date library. No remote fonts either.
 
+### About the dependency overrides
+
+`package.json` carries two:
+
+```json
+"overrides": {
+  "postcss": "^8.5.25",
+  "sharp": "^0.35.3"
+}
+```
+
+`next` pins `postcss` to exactly `8.4.31` and takes `sharp` as an optional dependency, and both of those versions carry advisories. The overrides raise only those two transitive packages. `npm audit` reports zero.
+
+**Do not run `npm audit fix --force`.** It proposes rolling `next` back to `9.3.3`, which is years old. This project keeps `next` on 16. The advisories were never in `next` itself — they were transitive, and the overrides above resolve them.
+
+For what it's worth, the app never uses `next/image`, so the `sharp` path is never exercised.
+
 Design documents and implementation plans live under `docs/superpowers/`. Where a change altered a contract, the original text stays and a dated erratum sits beside it.
 
 ## What this project does not do
