@@ -384,24 +384,7 @@ export function TodayPanel({ course, history, snapshot, verified, unavailable, q
           </p>
           <p className="mt-2 mb-0 text-sm text-muted-foreground">단계: {course.currentStage === null ? "없음" : STAGE_LABELS[course.currentStage]}</p>
         </Card>
-        {quiz ? (
-          <Card>
-            <h3 className="mt-0 mb-2 text-base font-bold">오늘의 퀴즈</h3>
-            <p className="mt-0 mb-3 text-sm text-muted-foreground">
-              다섯 문제를 모두 맞히면 회고로 넘어갑니다. 하나라도 틀리면 보완 학습을 거칩니다.
-            </p>
-            {quiz}
-          </Card>
-        ) : null}
-        {reflection ? (
-          <Card>
-            <h3 className="mt-0 mb-2 text-base font-bold">오늘의 회고</h3>
-            <p className="mt-0 mb-3 text-sm text-muted-foreground">
-              세 답변을 모두 제출하면 학습 기록에 저장되고 다음 Day로 이동합니다. 제출 전에는 저장되지 않습니다.
-            </p>
-            {reflection}
-          </Card>
-        ) : null}
+        {/* 학습이 먼저다. 퀴즈와 회고는 다 읽은 뒤에 온다. */}
         <DocumentPanel
           markdown={snapshot?.documents.currentDay ?? null}
           verified={verified}
@@ -409,6 +392,34 @@ export function TodayPanel({ course, history, snapshot, verified, unavailable, q
           emptyTitle="오늘 저장된 학습 내용이 없습니다"
           emptyDescription="Codex에서 $just-study 계속을 호출해 오늘의 리서치와 강의를 진행해 주세요."
         />
+        {quiz ? (
+          <Card>
+            <h3 id="today-quiz" className="mt-0 mb-2 text-base font-bold">2단계 · 오늘의 퀴즈</h3>
+            <p className="mt-0 mb-3 text-sm text-muted-foreground">
+              위 강의를 다 읽었다면 풀어 주세요. 다섯 문제를 모두 맞히면 회고로 넘어가고, 하나라도 틀리면 보완 학습을 거칩니다.
+            </p>
+            {quiz}
+          </Card>
+        ) : null}
+        {reflection ? (
+          <Card>
+            <h3 id="today-reflection" className="mt-0 mb-2 text-base font-bold">3단계 · 오늘의 회고</h3>
+            <p className="mt-0 mb-3 text-sm text-muted-foreground">
+              퀴즈를 통과했습니다. 세 답변을 모두 제출하면 학습 기록에 저장되고 다음 Day로 이동합니다. 제출 전에는 저장되지 않습니다.
+            </p>
+            {reflection}
+          </Card>
+        ) : null}
+        {!quiz && !reflection && course.status === "active" ? (
+          <Card>
+            <h3 className="mt-0 mb-2 text-base font-bold">다음 단계</h3>
+            <p className="m-0 text-sm text-muted-foreground">
+              {course.currentStage === "remediation"
+                ? "틀린 개념을 다시 설명받을 차례입니다. 위의 Codex에서 계속으로 이어가면 보완 강의와 새 퀴즈가 준비됩니다."
+                : "오늘의 강의를 다 읽었다면 위의 Codex에서 계속으로 이어가 주세요. 다섯 문제가 준비되면 이 화면에서 바로 풀 수 있습니다."}
+            </p>
+          </Card>
+        ) : null}
       </div>
     </div>
   );

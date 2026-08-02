@@ -1736,6 +1736,11 @@ test("the today tab mounts the reflection form only during the reflection stage"
     assert.match(reflectionToday, /id="reflection-feeling"/);
     assert.match(reflectionToday, /회고 제출하고 다음 Day로/);
     assert.match(reflectionToday, new RegExp(`name="expectedRevision" value="${getCourseHistory(db, courseId)!.course.revision}"`));
+    // 회고도 강의 본문 뒤에 온다.
+    const lessonBefore = reflectionToday.indexOf("전날 개념을 한 문장으로 회상한다");
+    const formAfter = reflectionToday.indexOf('id="reflection-learned"');
+    assert.notEqual(lessonBefore, -1, "강의 본문이 보여야 한다");
+    assert.ok(lessonBefore < formAfter, `강의(${lessonBefore})가 회고(${formAfter})보다 앞에 와야 한다`);
   } finally {
     db.close();
     if (previousRuntime === undefined) delete runtimeGlobal.__justStudyRuntime;
@@ -1938,6 +1943,12 @@ test("the today tab mounts the quiz form only during the quiz stage and never se
     for (const choice of list[0]!.choices) assert.ok(quizToday.includes(choice), choice);
     assert.doesNotMatch(quizToday, /correctChoiceIndex/);
     assert.equal((quizToday.match(/type="radio"/g) ?? []).length, 4);
+
+    // 학습이 먼저다. 강의 본문이 퀴즈 폼보다 위에 와야 한다.
+    const lessonIndex = quizToday.indexOf("전날 개념을 한 문장으로 회상한다");
+    const quizIndex = quizToday.indexOf('name="selectedChoiceIndex"');
+    assert.notEqual(lessonIndex, -1, "강의 본문이 보여야 한다");
+    assert.ok(lessonIndex < quizIndex, `강의(${lessonIndex})가 퀴즈(${quizIndex})보다 앞에 와야 한다`);
   } finally {
     db.close();
     if (previousRuntime === undefined) delete runtimeGlobal.__justStudyRuntime;
