@@ -199,7 +199,7 @@ state의 44px 이상 버튼을 사용한다.
 | 30일 계획 | `LearningDay[]` | 완료·현재·예정 Day와 각 목표 |
 | 오늘 | current Day, current-day Markdown | 목표, stage stepper, 현재 강의·체크포인트·보완 내용 |
 | 출처 | `ResearchRun[]` | 과정·일일 연구, 순위, 100점 점수, 선정 이유·한계, 주장 근거 |
-| 퀴즈 | `QuizAttempt[]` | Day별 시도, 문제, 응답 이력, 판정과 피드백 |
+| 퀴즈 | `QuizAttempt[]` | Day별 시도, 문제와 보기, 고른 답, 정·오답과 해설 |
 | 학습 기록 | completed Days, journal Markdown | 완료 Day 목록과 검증된 긴 회고 기록 |
 
 탭은 `?tab=overview|plan|today|sources|quiz|journal`로 표현한다. 알 수 없는 값은 `overview`
@@ -208,6 +208,19 @@ state의 44px 이상 버튼을 사용한다.
 데스크톱 `today` 탭은 본문과 보조 rail로 나눈다. 본문에는 오늘 목표와 stage stepper,
 검증된 학습 내용이 있고, rail에는 Codex 명령과 선정 출처 요약이 있다. 모바일에서는
 동일 순서로 한 열에 쌓으며 탭을 가로 스크롤한다.
+
+> **ERRATUM (2026-08-02, rail 제거):** 실제 화면을 본 사용자가 rail의 두 카드를
+> 빼라고 지시해 현재 구현에는 rail이 없다. `Codex에서 이어가기`는 과정 헤더의 같은
+> 버튼과 중복이었고, `현재 Day 선정 출처`는 `출처` 탭과 겹쳤다. 본문이 전체 폭을
+> 쓴다.
+>
+> 위 문단은 지우지 않고 남긴다. rail을 되살릴지는 아직 정하지 않았고, 되살린다면
+> 무엇을 담을지 다시 결정해야 한다. 지금 기준은 rail 없음이다.
+>
+> 같은 시점에 본문 순서도 바뀌었다. 원래 구현은 회고·퀴즈 폼을 학습 내용보다 위에
+> 두어 "배우기 전에 시험부터 보는" 화면이 됐다. 이제 목표 → stage stepper → 강의 →
+> 퀴즈 → 회고 순서이며, 현재 단계가 아닌 강의는 접어 둔다. 이 문단이 요구한 stage
+> stepper는 이때 처음 구현됐다.
 
 ### Markdown 표시
 
@@ -227,8 +240,18 @@ Phase 4의 편집은 사용자 입력이며 아직 학습 기록이 되지 않�
 
 1. 새 과정 shell 생성
 2. `draft` 과정의 제목과 목표 수정
-3. 현재 stage가 `reflection`일 때 아직 제출하지 않은 세 회고 답변 작성·수정
-4. 로컬 테마 선택
+3. 현재 stage가 `quiz`일 때 아직 답하지 않은 문항의 보기 선택
+4. 현재 stage가 `reflection`일 때 아직 제출하지 않은 세 회고 답변 작성·수정
+5. 로컬 테마 선택
+
+> **ERRATUM (2026-08-02, 퀴즈 응답 추가):** 원문은 편집 허용을 네 가지로 두고 퀴즈
+> 응답을 읽기 전용으로 분류했다. 사용자가 "웹에서도 에이전트에서도 같은 사지선다를
+> 풀 수 있어야 한다"고 요구해 퀴즈 응답이 다섯 번째 쓰기 경로가 됐다.
+>
+> 이 값이 다른 읽기 전용 값과 다른 이유는 명확하다. **학습자 본인의 입력이고 아직
+> 제출되지 않은 값**이라는 이 절의 원칙을 그대로 만족한다. 문제·보기·정답·해설은
+> 여전히 읽기 전용이며 UI에서 만들 수 없다. 정답 인덱스는 답하기 전까지 브라우저로
+> 전송되지 않는다. 채점은 서버가 하므로 UI가 결과를 지정할 수 없다.
 
 draft 수정은 새 `updateCourseDraft` 서비스 함수로 처리한다. 제목·목표의 기존 길이와
 문자 검증을 재사용하고 `expectedRevision`을 요구한다. SQLite와 `course.md`를 기존
@@ -244,7 +267,9 @@ stage, revision과 Day 30 종료 규칙은 서비스가 그대로 결정한다. 
 - 승인된 30일 목표
 - 과정·일일 연구 질문, 출처 점수, 순위와 주장 검증
 - 강의·보완 Markdown
-- quiz 문제, 기준, 응답과 채점 결과
+- quiz 문제, 보기, 정답, 해설과 채점 결과 (2026-08-02 정정: 원문의 `기준`은
+  사지선다 전환으로 문항별 `해설`이 됐고, 아직 답하지 않은 문항의 보기 선택만
+  위 편집 허용 3번으로 예외 처리된다. 저장된 응답과 채점 결과는 계속 읽기 전용이다.)
 - 완료된 Day, 제출된 회고와 현재 stage
 
 이 값을 UI에서 직접 SQL 또는 Markdown 수정으로 바꾸지 않는다. 변경 요구가 생기면
@@ -258,7 +283,7 @@ last-write-wins를 사용하지 않는다. 입력을 보존한 alert에서 `최�
 
 ## 테마 시스템
 
-세 테마는 정확히 같은 React 컴포넌트와 DOM을 사용하고 CSS custom properties만
+모든 테마는 정확히 같은 React 컴포넌트와 DOM을 사용하고 CSS custom properties만
 교체한다.
 
 | 값 | 이름 | 역할 |
@@ -266,6 +291,25 @@ last-write-wins를 사용하지 않는다. 입력을 보존한 alert에서 `최�
 | `focus` | Focus | 기본, 첨부한 black/white/red/yellow 테마 |
 | `calm` | Calm | 긴 읽기를 위한 따뜻한 neutral 테마 |
 | `focus-dark` | Focus Dark | 첨부 테마의 dark token |
+| `bubblegum` | Bubblegum | 크림 종이에 분홍·하늘·노랑. Focus와 같은 구조 |
+| `terminal` | Terminal | 검은 배경에 인광 초록, 화면 전체 고정폭 |
+
+> **ERRATUM (2026-08-02, 테마 추가):** 원문은 세 테마를 전제했다. 사용자 요청으로
+> Bubblegum과 Terminal을 추가해 다섯이 됐다. 두 테마 모두 새 컴포넌트를 만들지 않고
+> 토큰만 교체하므로 이 절의 원칙은 그대로 지켜진다.
+>
+> 어두운 테마가 둘이 되면서 `focus-dark` 하나를 가정하던 코드를 목록으로 바꿨다.
+> `focus-dark`와 `terminal`이 `.dark` class와 `color-scheme: dark`를 받는다.
+>
+> 두 테마 모두 원본 팔레트를 그대로 쓰지 않았다. Bubblegum의 분홍은 버튼 글자
+> 2.85:1, 포커스 링 2.63:1로 미달이라 같은 색조의 더 진한 값으로 바꿨다. Terminal은
+> 테두리가 배경 대비 1.63:1이고 입력 배경이 페이지와 같은 순검정이라 입력칸이 보이지
+> 않았고, destructive 위 흰 글자가 4.00:1이었다. 셋 다 조정했다. 이 절 아래의
+> "시각 유사성보다 접근성을 우선한다"를 따른 것이다.
+>
+> 두 테마가 요구한 원격 폰트(Work Sans/Caveat/DM Mono, VT323)는 이 문서의 원격 폰트
+> 금지에 따라 도입하지 않았다. Terminal은 기존 monospace 스택을 화면 전체에 적용해
+> 질감을 낸다.
 
 ### 기본 Focus 토큰
 
@@ -415,7 +459,7 @@ form 값을 지우지 않고, 성공 상태는 `aria-live="polite"`, 오류는 �
 - horizontal scroll은 과정 상세 tab과 code block처럼 의도된 곳에만 허용한다.
 - 상태 badge, 차트 색과 course accent만으로 의미를 전달하지 않는다.
 - `prefers-reduced-motion`을 존중한다.
-- Focus, Calm, Focus Dark의 본문·버튼·muted text·focus ring contrast를 확인한다.
+- 모든 테마의 본문·버튼·muted text·focus ring contrast를 확인한다.
 
 ## 성능과 단순성
 
@@ -453,7 +497,7 @@ form 값을 지우지 않고, 성공 상태는 `aria-live="polite"`, 오류는 �
 2. 375px, 768px, 1280px에서 Today, Courses, 여섯 course tab과 Settings를 확인한다.
 3. 키보드만으로 skip link, sidebar 또는 bottom nav, tab, form과 theme picker를
    이동·조작한다.
-4. Focus가 첫 방문 기본이고 세 테마가 reload 뒤 유지되며 첫 paint에서 깜빡이지 않는지
+4. Focus가 첫 방문 기본이고 모든 테마가 reload 뒤 유지되며 첫 paint에서 깜빡이지 않는지
    확인한다.
 5. clipboard 성공·실패, draft 저장 성공·검증 실패·revision 충돌을 확인한다.
 6. reflection 제출 성공·실패 시 입력 보존, stage 전환과 다음 Day 표시를 확인한다.
@@ -470,7 +514,7 @@ form 값을 지우지 않고, 성공 상태는 `aria-live="polite"`, 오류는 �
 | 사용자 가치와 기획 의도 | 25 | 재개·탐색·제한된 편집 흐름이 실제 데이터로 연결됨 |
 | 정보 구조와 사용성 | 20 | 다음 행동이 명확하고 과정 정보가 예측 가능한 위치에 있음 |
 | 반응형과 접근성 | 20 | 세 viewport, 키보드, touch, contrast와 reduced motion 통과 |
-| 시각 품질과 테마 일관성 | 15 | 세 테마가 같은 구조에서 완성되고 Focus가 정확한 기본값임 |
+| 시각 품질과 테마 일관성 | 15 | 모든 테마가 같은 구조에서 완성되고 Focus가 정확한 기본값임 |
 | 데이터 무결성과 오류 복구 | 15 | revision·체크섬·원자성 우회가 없고 입력·복구 경로가 보존됨 |
 | 성능과 단순성 | 5 | 불필요한 client state·의존성·복제 없이 필요한 UI만 구현됨 |
 
@@ -486,7 +530,7 @@ form 값을 지우지 않고, 성공 상태는 `aria-live="polite"`, 오류는 �
 - Focus가 기본이며 Calm과 Focus Dark 선택이 reload와 첫 paint에서 안정적으로 유지된다.
 - 데스크톱 sidebar와 모바일 context bar·bottom navigation이 승인된 구조로 동작한다.
 - 모든 empty, loading, error와 recovery 상태가 구현된다.
-- 375px, 768px, 1280px, 키보드와 세 테마에서 품질 게이트를 통과한다.
+- 375px, 768px, 1280px, 키보드와 모든 테마에서 품질 게이트를 통과한다.
 - 일정·뽀모도로·파일 등 후속 범위의 placeholder나 speculative code가 없다.
 
 ## 후속 확장점

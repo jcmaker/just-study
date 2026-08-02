@@ -149,14 +149,23 @@ default_tools_approval_mode = "writes"
 | `approve_outline` | `approveOutline` | 시작 인터뷰, 검증된 전체 연구, 30개 목표, revision |
 | `record_daily_research` | `recordDailyResearch` | 당일 검증 연구, revision |
 | `save_checkpoint` | `saveLearningCheckpoint` | 강의/인터뷰 또는 보충 내용, 개념 상태, revision |
-| `start_quiz` | `startQuiz` | 답변 전 확정한 정확히 5문제와 기준, revision |
-| `grade_quiz` | `gradeQuiz` | 시도 ID, 사용자 답변, 판정과 피드백, revision |
+| `start_quiz` | `startQuiz` | 답변 전 확정한 정확히 5문제, 각 문제의 보기 4개·정답 인덱스·해설, revision |
+| `answer_quiz` | `answerQuiz` | 시도 ID, 학습자가 고른 보기 번호, revision |
 | `start_remediation_quiz` | `startRemediationQuiz` | 다른 설명·예제와 새 5문제, revision |
 | `complete_day` | `completeDay` | 세 회고 답변, revision |
 
 모든 상태 변경은 기존 서비스 함수에 그대로 위임한다. 어댑터는 학습 단계를 추측해
 바꾸거나 revision을 대신 보정하지 않는다. 각 성공 응답은 새 revision과 다음 Day·
 단계를 포함한 compact state를 반환한다.
+
+> **ERRATUM (2026-08-02, 퀴즈 사지선다 전환):** 원문의 `grade_quiz`는 호출자가
+> `사용자 답변, 판정과 피드백`을 보내는 계약이었다. 즉 에이전트가 정·오답을
+> 지정했고 서버는 그 값을 검증 없이 저장했다. 사용자 요청으로 퀴즈를 사지선다로
+> 바꾸면서 **채점 주체가 서버로 옮겨졌다.** 도구 이름도 `answer_quiz`로 바뀌었고,
+> 호출자는 학습자가 고른 보기 번호만 보낸다. 서버가 `start_quiz` 시점에 저장한 정답
+> 인덱스와 비교해 결과를 정하므로 **어떤 클라이언트도 채점 결과를 지정할 수 없다.**
+> 이 변경은 웹과 에이전트가 같은 퀴즈에서 같은 결과를 내야 한다는 요구에서 나왔고,
+> 부수적으로 기존 계약의 신뢰 구멍을 막는다.
 
 읽기 도구는 MCP read-only annotation을 사용한다. 쓰기 도구는 read-only로 표시하지
 않고, `create_course` 외에는 재호출을 idempotent하다고 선언하지 않는다.
@@ -246,7 +255,9 @@ MCP 응답을 별도 저장하거나 MCP 세션을 기준 데이터로 사용하
 4. 공식 MCP client 2.0.0이 실제 `/mcp` handler와 협상하고 도구를 조회·호출하는지
    in-process로 검사한다.
 5. 임시 데이터 루트에서 MCP만 사용해 과정 생성, 전체 연구, 강의 체크포인트,
-   애매한 답변, 4/5, 보충 학습, 새 5문제, 5/5와 회고를 통과한다.
+   부분 응답, 4/5, 보충 학습, 새 5문제, 5/5와 회고를 통과한다.
+   (2026-08-02 정정: 원문의 "애매한 답변"은 사지선다 전환으로 사라졌다. 대신
+   다섯 문항 중 일부만 답한 중간 상태를 검사한다.)
 6. 런타임을 닫고 다시 연 뒤 동일 Day·stage·문제·응답·Markdown에서 재개한다.
 7. MCP를 통해 30개 Day를 완료하고 Day 31, 현재 Day 파일과 손상 상태가 없음을
    확인한다.

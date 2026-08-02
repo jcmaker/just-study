@@ -64,9 +64,15 @@ Next.js 단일 애플리케이션, SQLite, 로컬 파일 저장, 공통 서비�
 ### 4. 학습 대시보드
 
 과정, 오늘의 학습, 진도, 출처, 퀴즈와 회고를 웹과 모바일 브라우저에서 확인한다.
-무결성을 해치지 않는 draft 과정 정보와 제출 전 회고만 직접 편집한다. 공통 app shell과
-동일한 컴포넌트 구조에서 Focus, Calm, Focus Dark 세 테마를 제공하고 사용자가 제공한
-black/white/red/yellow 테마를 기본 Focus로 사용한다.
+무결성을 해치지 않는 draft 과정 정보, 아직 답하지 않은 퀴즈 보기 선택, 제출 전 회고만
+직접 편집한다. 공통 app shell과 동일한 컴포넌트 구조에서 Focus, Calm, Focus Dark,
+Bubblegum, Terminal 다섯 테마를 제공하고 사용자가 제공한 black/white/red/yellow
+테마를 기본 Focus로 사용한다.
+
+> **ERRATUM (2026-08-02):** 원문은 테마 셋과 "draft 정보·제출 전 회고만" 편집
+> 가능하다고 적었다. 퀴즈가 사지선다로 바뀌면서 아직 답하지 않은 보기 선택이
+> 편집 대상에 추가됐고, 테마가 다섯으로 늘었다. 근거는
+> `2026-07-31-just-study-dashboard-uiux-design.md`의 같은 날짜 ERRATUM에 있다.
 
 설계 문서: `2026-07-31-just-study-dashboard-uiux-design.md`
 
