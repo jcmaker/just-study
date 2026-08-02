@@ -221,3 +221,9 @@ No data model or abstraction is built for these until there is real demand for t
 ## Credits
 
 [OpenStudy](https://github.com/OpenStudy-dev/OpenStudy) was read as a reference for how a self-hosted study tool is operated and shaped. `just-study` is a separate product and reuses none of its code.
+
+## License
+
+[MIT](LICENSE).
+
+The `"private": true` field in `package.json` blocks publishing to the npm registry. It says nothing about the source or the license — this is an app you run yourself, not a package.

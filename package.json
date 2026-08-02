@@ -1,6 +1,30 @@
 {
   "name": "just-study",
   "version": "0.1.0",
+  "description": "Pick a topic and an agent researches sources, scores them, and builds a 30-day course you study one day at a time. Self-hosted, localhost only.",
+  "license": "MIT",
+  "author": "jcmaker <jcmaker0627@gmail.com>",
+  "homepage": "https://github.com/jcmaker/just-study#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcmaker/just-study.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jcmaker/just-study/issues"
+  },
+  "keywords": [
+    "self-hosted",
+    "learning",
+    "study",
+    "mcp",
+    "model-context-protocol",
+    "codex",
+    "ai-agent",
+    "nextjs",
+    "sqlite",
+    "markdown"
+  ],
+  "//": "private blocks npm publish. This is a self-hosted app, not a package, so it stays. It does not affect the MIT license or the public source.",
   "private": true,
   "type": "module",
   "engines": {

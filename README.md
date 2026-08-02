@@ -233,3 +233,9 @@ npm run build
 ## 참고
 
 self-host 운영 방식과 학습 관리 기능이 어떤 모습인지 보려고 [OpenStudy](https://github.com/OpenStudy-dev/OpenStudy)를 참고 자료로 살펴봤습니다. `just-study`는 독립 제품이며 코드를 재사용하지 않았습니다.
+
+## 라이선스
+
+[MIT](LICENSE).
+
+`package.json`의 `"private": true`는 npm 레지스트리 publish를 막는 설정이며 소스 공개나 라이선스와는 무관합니다. 이 프로젝트는 npm 패키지가 아니라 직접 띄워 쓰는 앱입니다.
