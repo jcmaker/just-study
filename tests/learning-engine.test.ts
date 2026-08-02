@@ -1141,8 +1141,8 @@ test("research trims accepted fields and rejects overlength outer whitespace wit
     assert.ok(snapshot.documents.currentDay!.includes(dailySource.title));
     assert.doesNotMatch(snapshot.documents.currentDay!, /고정 평가 루브릭/);
     assert.doesNotMatch(snapshot.documents.currentDay!, /독립성 키/);
-    // 감사용 전체 점수표는 과정 문서에 그대로 남는다.
-    assert.match(snapshot.documents.course, /고정 평가 루브릭/);
+    // 고정 루브릭은 서버 검증용 상수다. 과정 문서에도 싣지 않는다.
+    assert.doesNotMatch(snapshot.documents.course, /고정 평가 루브릭/);
     assert.match(snapshot.documents.currentDay!, new RegExp(dailyNarrative));
   }));
 });

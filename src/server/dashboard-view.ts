@@ -14,6 +14,35 @@ export const STATUS_LABELS: Record<CourseStatus, string> = {
   completed: "완료",
 };
 
+// 학습 엔진이 정한 하루 진행 순서. 강의 → 퀴즈 → 보완 학습 → 회고 → Day 완료.
+export const STAGE_ORDER: readonly LearningStage[] = ["lecture", "quiz", "remediation", "reflection"];
+
+export type StageStep = {
+  key: LearningStage | "done";
+  label: string;
+  state: "done" | "current" | "upcoming";
+};
+
+export function stageSteps(currentStage: LearningStage | null, courseCompleted: boolean): StageStep[] {
+  const labels: { key: LearningStage | "done"; label: string }[] = [
+    ...STAGE_ORDER.map((stage) => ({ key: stage as LearningStage | "done", label: STAGE_LABELS[stage] })),
+    { key: "done", label: "Day 완료" },
+  ];
+
+  if (courseCompleted) {
+    return labels.map((step) => ({ ...step, state: step.key === "done" ? "current" : "done" }));
+  }
+  if (currentStage === null) {
+    return labels.map((step) => ({ ...step, state: "upcoming" }));
+  }
+
+  const currentIndex = STAGE_ORDER.indexOf(currentStage);
+  return labels.map((step, index) => ({
+    ...step,
+    state: index < currentIndex ? "done" : index === currentIndex ? "current" : "upcoming",
+  }));
+}
+
 export const RESUME_COMMAND = "$just-study 계속";
 export const TOTAL_DAYS = 30;
 export const ATTENTION_LIMIT = 3;

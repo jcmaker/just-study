@@ -1995,3 +1995,89 @@ test("a quiz action rejects missing or blank revisions without recording an answ
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+test("stage steps follow the learning engine order and mark exactly one current step", async () => {
+  const { stageSteps, STAGE_ORDER } = await import("../src/server/dashboard-view.ts");
+
+  assert.deepEqual([...STAGE_ORDER], ["lecture", "quiz", "remediation", "reflection"]);
+  assert.deepEqual(
+    stageSteps("lecture", false).map(({ label }) => label),
+    ["강의", "퀴즈", "보완 학습", "회고", "Day 완료"],
+  );
+
+  for (const [index, stage] of STAGE_ORDER.entries()) {
+    const steps = stageSteps(stage, false);
+    assert.equal(steps.filter(({ state }) => state === "current").length, 1, stage);
+    assert.equal(steps.findIndex(({ state }) => state === "current"), index, stage);
+    assert.ok(steps.slice(0, index).every(({ state }) => state === "done"), stage);
+    assert.ok(steps.slice(index + 1).every(({ state }) => state === "upcoming"), stage);
+  }
+
+  const completed = stageSteps(null, true);
+  assert.equal(completed.at(-1)!.state, "current");
+  assert.ok(completed.slice(0, -1).every(({ state }) => state === "done"));
+
+  const notStarted = stageSteps(null, false);
+  assert.ok(notStarted.every(({ state }) => state === "upcoming"));
+});
+
+test("the today tab shows a stage stepper and folds the lecture away outside the lecture stage", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    __justStudyRuntime?: { dataRoot: string; db: DatabaseHandle | null };
+  };
+  const previousRuntime = runtimeGlobal.__justStudyRuntime;
+  runtimeGlobal.__justStudyRuntime = { dataRoot, db };
+
+  try {
+    const { default: CoursePage } = await import("../src/app/courses/[id]/page.tsx");
+    const renderToday = async (id: string) =>
+      renderToStaticMarkup(
+        await CoursePage({
+          params: Promise.resolve({ id }),
+          searchParams: Promise.resolve({ tab: "today" }),
+        }),
+      );
+
+    const lectureCourse = approve(db, dataRoot, "강의 단계 스텝", [
+      "https://ss.example.edu/a",
+      "https://ss.example.org/b",
+    ]).course;
+    const lectureToday = await renderToday(lectureCourse.id);
+    // 다섯 단계가 순서대로 보이고 현재 단계가 하나만 표시된다.
+    assert.match(lectureToday, /오늘의 진행 단계/);
+    for (const label of ["강의", "퀴즈", "보완 학습", "회고", "Day 완료"]) {
+      assert.ok(lectureToday.includes(label), label);
+    }
+    assert.equal((lectureToday.match(/aria-current="step"/g) ?? []).length, 1);
+    // 강의 단계에서는 강의를 접지 않는다.
+    assert.doesNotMatch(lectureToday, /1단계 · 오늘의 강의 다시 보기/);
+
+    const { courseId } = reachQuiz(db, dataRoot, "퀴즈 단계 스텝", "step-quiz");
+    const quizToday = await renderToday(courseId);
+    assert.equal((quizToday.match(/aria-current="step"/g) ?? []).length, 1);
+    // 퀴즈 단계에서는 강의가 접힌 채로 남고 퀴즈가 펼쳐진다.
+    assert.match(quizToday, /1단계 · 오늘의 강의 다시 보기/);
+    assert.match(quizToday, /<details/);
+    assert.match(quizToday, /2단계 · 오늘의 퀴즈/);
+    assert.doesNotMatch(quizToday, /3단계 · 오늘의 회고/);
+  } finally {
+    db.close();
+    if (previousRuntime === undefined) delete runtimeGlobal.__justStudyRuntime;
+    else runtimeGlobal.__justStudyRuntime = previousRuntime;
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("the daily and course documents never print the fixed scoring rubric", () => {
+  withRuntime((db, dataRoot) => {
+    const { courseId, state } = reachQuiz(db, dataRoot, "루브릭 비공개", "rubric-hidden");
+    assert.equal(state.course.currentStage, "quiz");
+    const snapshot = getLearningSnapshot(db, dataRoot, courseId)!;
+    for (const [name, document] of [["current-day", snapshot.documents.currentDay!], ["course", snapshot.documents.course]] as const) {
+      assert.doesNotMatch(document, /고정 평가 루브릭/, name);
+      assert.doesNotMatch(document, /\| 평가 기준 \| 배점 \|/, name);
+    }
+  });
+});

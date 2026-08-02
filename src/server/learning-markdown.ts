@@ -10,10 +10,6 @@ import type {
 } from "./learning.ts";
 import type { Course } from "./courses.ts";
 
-const RUBRIC_ROWS = [
-  ["권위", 25], ["교차 검증", 25], ["관련성", 20], ["교육 품질", 15], ["최신성", 10], ["접근성", 5],
-] as const;
-
 const LESSON_SECTIONS: readonly [keyof LessonContentInput, string][] = [
   ["recallMarkdown", "회상"], ["preciseExplanationMarkdown", "정확한 설명"],
   ["eli5Markdown", "ELI5"], ["analogyMarkdown", "비유"], ["exampleMarkdown", "구체적 예제"],
@@ -37,15 +33,12 @@ function rubricTotalForMarkdown(scores: ResearchBundleInput["sources"][number]["
   return scores.authority + scores.crossValidation + scores.relevance + scores.teachingQuality + scores.currency + scores.accessibility;
 }
 
-function renderRubric(): string {
-  return ["| 평가 기준 | 배점 |", "|---|---:|", ...RUBRIC_ROWS.map(([label, maximum]) => `| ${label} | ${maximum} |`), "| **합계** | **100** |"].join("\n");
-}
-
 // 감사용 전체 표는 과정 문서에만 넣는다. 매일 읽는 학습 문서에는 링크만 남긴다.
 function renderResearchBundle(research: ResearchBundleInput, detailed = true): string {
   const sourcesById = new Map(research.sources.map((source) => [source.id, source]));
   const scoreTable = [
-    "#### 고정 평가 루브릭", "", renderRubric(), "", "#### 리서치 본문", "", research.narrativeMarkdown.trim(), "",
+    // 루브릭은 서버가 점수를 검증할 때 쓰는 고정 상수다. 학습자 화면에는 싣지 않는다.
+    "#### 리서치 본문", "", research.narrativeMarkdown.trim(), "",
     "#### 후보 자료", "", "| 순위 | 선정 | 제목 | URL | 발행처 | 독립성 키 | 권위 | 교차 검증 | 관련성 | 교육 품질 | 최신성 | 접근성 | 합계 | 선정 이유 | 한계 |",
     "|---:|:---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|",
     ...research.sources.slice().sort((left, right) => left.rank - right.rank).map((source) => [

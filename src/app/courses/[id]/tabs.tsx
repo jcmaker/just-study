@@ -6,6 +6,7 @@ import {
   COURSE_TAB_LABELS,
   documentState,
   STAGE_LABELS,
+  stageSteps,
   type CourseTab,
 } from "../../../server/dashboard-view.ts";
 import type { CourseHistory, CourseHistoryCourse, LearningSnapshot } from "../../../server/learning.ts";
@@ -374,6 +375,17 @@ export function TodayPanel({ course, history, snapshot, verified, unavailable, q
   reflection?: ReactNode;
 }) {
   const currentDay = snapshot?.currentDay ?? history.days.find(({ id }) => id === course.currentDayId) ?? null;
+  const steps = stageSteps(course.currentStage, course.status === "completed");
+  const onLecture = course.currentStage === "lecture" || course.currentStage === null;
+  const lesson = (
+    <DocumentPanel
+      markdown={snapshot?.documents.currentDay ?? null}
+      verified={verified}
+      unavailable={unavailable}
+      emptyTitle="오늘 저장된 학습 내용이 없습니다"
+      emptyDescription="Codex에서 $just-study 계속을 호출해 오늘의 리서치와 강의를 진행해 주세요."
+    />
+  );
   return (
     <div className="grid gap-4">
       <div className="grid gap-4">
@@ -382,16 +394,35 @@ export function TodayPanel({ course, history, snapshot, verified, unavailable, q
           <p className="m-0 break-words">
             {currentDay?.objective ?? (course.status === "completed" ? "모든 Day를 마쳤습니다." : "아직 시작한 Day가 없습니다.")}
           </p>
-          <p className="mt-2 mb-0 text-sm text-muted-foreground">단계: {course.currentStage === null ? "없음" : STAGE_LABELS[course.currentStage]}</p>
+          <ol aria-label="오늘의 진행 단계" className="mt-3 mb-0 flex flex-wrap items-center gap-x-1 gap-y-2 p-0 text-sm">
+            {steps.map((step, index) => (
+              <li key={step.key} className="flex list-none items-center gap-1">
+                {index > 0 ? <span aria-hidden="true" className="text-muted-foreground">→</span> : null}
+                <span
+                  aria-current={step.state === "current" ? "step" : undefined}
+                  className={[
+                    "inline-flex items-center gap-1 px-2 py-1 radius-md",
+                    step.state === "current" ? "bw border-border font-bold" : "text-muted-foreground",
+                  ].join(" ")}
+                >
+                  {step.state === "done" ? <span aria-hidden="true">✓</span> : null}
+                  {step.label}
+                  {step.state === "current" ? <span className="sr-only"> (현재 단계)</span> : null}
+                  {step.state === "done" ? <span className="sr-only"> (완료)</span> : null}
+                </span>
+              </li>
+            ))}
+          </ol>
         </Card>
-        {/* 학습이 먼저다. 퀴즈와 회고는 다 읽은 뒤에 온다. */}
-        <DocumentPanel
-          markdown={snapshot?.documents.currentDay ?? null}
-          verified={verified}
-          unavailable={unavailable}
-          emptyTitle="오늘 저장된 학습 내용이 없습니다"
-          emptyDescription="Codex에서 $just-study 계속을 호출해 오늘의 리서치와 강의를 진행해 주세요."
-        />
+        {/* 현재 단계에 맞는 내용만 펼친다. 강의 단계가 아니면 강의는 접어 둔다. */}
+        {onLecture ? lesson : (
+          <details className="surface p-0">
+            <summary className="tap-target flex cursor-pointer items-center px-4 py-3 font-semibold">
+              1단계 · 오늘의 강의 다시 보기
+            </summary>
+            <div className="px-4 pb-4">{lesson}</div>
+          </details>
+        )}
         {quiz ? (
           <Card>
             <h3 id="today-quiz" className="mt-0 mb-2 text-base font-bold">2단계 · 오늘의 퀴즈</h3>
