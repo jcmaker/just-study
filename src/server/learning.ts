@@ -935,7 +935,18 @@ export type CourseHistoryResearchRun = ResearchRun & {
   dayObjective: string | null;
 };
 
-export type CourseHistoryQuizAttempt = QuizAttempt & {
+/**
+ * Quiz history the UI may see. The answer key and its explanation are null until
+ * the learner has answered, so an unanswered question cannot be solved by
+ * reading another tab. The types make the redaction impossible to forget.
+ */
+export type CourseHistoryQuizQuestion = Omit<QuizQuestion, "correctChoiceIndex" | "explanation"> & {
+  correctChoiceIndex: number | null;
+  explanation: string | null;
+};
+
+export type CourseHistoryQuizAttempt = Omit<QuizAttempt, "questions"> & {
+  questions: CourseHistoryQuizQuestion[];
   dayId: string;
   dayNumber: number;
   dayObjective: string;
@@ -1008,7 +1019,15 @@ export function getCourseHistory(db: DatabaseHandle, courseId: string): CourseHi
   const quizAttempts = loadQuizAttempts(db, attemptRows).map(({ row, ...attempt }): CourseHistoryQuizAttempt => {
     const day = dayById.get(row.day_id);
     if (!day) throw new LearningStateError("Quiz attempt Day is missing");
-    return { ...attempt, dayId: row.day_id, dayNumber: day.dayNumber, dayObjective: day.objective };
+    // 이 읽기 모델은 브라우저로 나간다. 아직 답하지 않은 문항의 정답과 해설을
+    // 내려보내면 학습자가 다른 탭에서 답을 먼저 볼 수 있으므로 여기서 지운다.
+    // 채점에 쓰이는 정답은 getLearningSnapshot 경로에 그대로 남는다.
+    const questions = attempt.questions.map((question) =>
+      question.response === null
+        ? { ...question, correctChoiceIndex: null, explanation: null }
+        : question,
+    );
+    return { ...attempt, questions, dayId: row.day_id, dayNumber: day.dayNumber, dayObjective: day.objective };
   });
 
   return { course, days, researchRuns, quizAttempts };

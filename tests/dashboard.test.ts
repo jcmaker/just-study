@@ -2098,3 +2098,53 @@ test("the daily and course documents never print the fixed scoring rubric", () =
     }
   });
 });
+
+test("the quiz tab hides the answer key for questions the learner has not answered", async () => {
+  const dataRoot = makeDataRoot();
+  const db = openDatabase(dataRoot);
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    __justStudyRuntime?: { dataRoot: string; db: DatabaseHandle | null };
+  };
+  const previousRuntime = runtimeGlobal.__justStudyRuntime;
+  runtimeGlobal.__justStudyRuntime = { dataRoot, db };
+
+  try {
+    const { default: CoursePage } = await import("../src/app/courses/[id]/page.tsx");
+    const { courseId, state, list } = reachQuiz(db, dataRoot, "정답 비공개", "answer-key");
+    const attemptId = state.quizAttempts.at(-1)!.id;
+
+    // 첫 문항만 답한다. 나머지 네 문항은 미응답으로 남는다.
+    answerQuiz(db, dataRoot, {
+      courseId,
+      expectedRevision: state.course.revision,
+      attemptId,
+      answers: [{ questionId: list[0]!.id, selectedChoiceIndex: list[0]!.correctChoiceIndex }],
+    });
+
+    const quizTab = renderToStaticMarkup(
+      await CoursePage({
+        params: Promise.resolve({ id: courseId }),
+        searchParams: Promise.resolve({ tab: "quiz" }),
+      }),
+    );
+
+    // 답한 문항에는 정답과 해설이 보인다.
+    assert.ok(quizTab.includes(list[0]!.prompt));
+    assert.match(quizTab, /\(정답\)/);
+    assert.equal((quizTab.match(/\(정답\)/g) ?? []).length, 1, "정답 표시는 답한 문항 하나에만 붙어야 한다");
+
+    // 미응답 문항의 정답 보기 텍스트가 정답으로 강조되면 안 된다.
+    for (const question of list.slice(1)) {
+      const correct = question.choices[question.correctChoiceIndex]!;
+      const marked = new RegExp(`${correct.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^<]*</[^>]*>\\s*<span[^>]*>\\(정답\\)`);
+      assert.doesNotMatch(quizTab, marked, question.prompt);
+    }
+    // 미응답 문항의 해설도 미리 보이면 안 된다.
+    assert.equal((quizTab.match(/아직 답변하지 않았습니다/g) ?? []).length, 4);
+  } finally {
+    db.close();
+    if (previousRuntime === undefined) delete runtimeGlobal.__justStudyRuntime;
+    else runtimeGlobal.__justStudyRuntime = previousRuntime;
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
