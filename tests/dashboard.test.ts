@@ -885,10 +885,11 @@ test("parser keeps every malformed-table cell as literal text", () => {
 });
 
 test("theme values are validated and default to focus", () => {
-  assert.deepEqual([...THEMES], ["focus", "calm", "focus-dark"]);
+  assert.deepEqual([...THEMES], ["focus", "calm", "focus-dark", "zine"]);
   assert.equal(DEFAULT_THEME, "focus");
   assert.equal(THEME_STORAGE_KEY, "just-study:theme");
-  assert.deepEqual(Object.keys(THEME_LABELS).sort(), ["calm", "focus", "focus-dark"]);
+  // 라벨은 테마 목록과 정확히 일대일이어야 한다. 테마를 늘리면 여기서 먼저 걸린다.
+  assert.deepEqual(Object.keys(THEME_LABELS).sort(), [...THEMES].sort());
   for (const theme of THEMES) assert.equal(normalizeTheme(theme), theme);
   for (const value of [undefined, null, "", "dark", "FOCUS", "focus ", 3, {}, ["calm"]]) {
     assert.equal(normalizeTheme(value), "focus");
@@ -937,7 +938,7 @@ test("the bootstrap script is self-contained, synchronous, and fails closed to f
   assert.match(THEME_BOOTSTRAP_SCRIPT, /catch\(e\)\{[^}]*setAttribute\("data-theme","focus"\)[^}]*colorScheme="light"/);
 });
 
-test("globals.css defines every semantic and chart token for all three themes", () => {
+test("globals.css defines every semantic and chart token for every theme", () => {
   const css = readFileSync(resolve(import.meta.dirname, "../src/app/globals.css"), "utf8");
   const tokens = [
     "--background", "--foreground", "--card", "--card-foreground", "--popover", "--popover-foreground",
@@ -947,19 +948,22 @@ test("globals.css defines every semantic and chart token for all three themes", 
     "--sidebar-primary-foreground", "--sidebar-accent", "--sidebar-accent-foreground",
     "--sidebar-border", "--sidebar-ring", "--radius-sm", "--radius-md", "--radius-lg", "--radius-xl",
   ];
-  for (const [name, pattern] of [
-    ["focus", /:root,\s*\[data-theme="focus"\]\s*\{([^}]*)\}/],
-    ["calm", /\[data-theme="calm"\]\s*\{([^}]*)\}/],
-    ["focus-dark", /\[data-theme="focus-dark"\]\s*\{([^}]*)\}/],
-  ] as const) {
+  // 테마 목록을 그대로 순회한다. 새 테마가 토큰을 빠뜨리면 여기서 걸린다.
+  for (const name of THEMES) {
+    const pattern = name === "focus"
+      ? /:root,\s*\[data-theme="focus"\]\s*\{([^}]*)\}/
+      : new RegExp(`\\[data-theme="${name}"\\]\\s*\\{([^}]*)\\}`);
     const block = pattern.exec(css)?.[1];
     assert.ok(block, `globals.css has no ${name} token block`);
     for (const token of tokens) {
       assert.match(block, new RegExp(`${token}\\s*:`), `${name} is missing ${token}`);
     }
+    for (const slot of [0, 1, 2, 3, 4, 5]) {
+      assert.match(block, new RegExp(`--course-accent-${slot}\\s*:`), `${name} is missing course accent ${slot}`);
+    }
   }
-  assert.equal((css.match(/--chart-1\s*:/g) ?? []).length, 3);
-  assert.equal((css.match(/--chart-5\s*:/g) ?? []).length, 3);
+  assert.equal((css.match(/--chart-1\s*:/g) ?? []).length, THEMES.length);
+  assert.equal((css.match(/--chart-5\s*:/g) ?? []).length, THEMES.length);
   assert.equal(css.includes("calc(var(--radius)"), false);
   assert.equal(css.includes("--font-sans: var(--font-sans);"), false);
   assert.equal(css.includes("/ 2.50)"), false);

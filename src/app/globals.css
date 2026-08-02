@@ -173,6 +173,77 @@
   --course-accent-5: oklch(0.7400 0.1100 200.0000);
 }
 
+/* Zine: cream paper with pink/cyan/yellow stickers. Same neo-brutalist
+   construction as Focus (0 radius, hard offset shadow, 2px ink border), so it
+   swaps only custom properties and reuses the exact component tree.
+
+   Two colours differ from the source palette on purpose. Its bright pink
+   #ff4f92 carries light text at 2.85:1 and reads as a focus ring against the
+   cream at 2.63:1, both below WCAG. The deeper #c2185b keeps the same hue while
+   reaching 5.40:1 for button text and 4.99:1 as a ring, so accessibility wins
+   over a verbatim copy. The bright pink stays available as a surface colour
+   where ink sits on top (7.34:1). */
+[data-theme="zine"] {
+  --background: oklch(0.9445 0.0253 86.87);
+  --foreground: oklch(0.2070 0.0075 67.39);
+  --card: oklch(0.9708 0.0208 88.72);
+  --card-foreground: oklch(0.2070 0.0075 67.39);
+  --popover: oklch(0.9708 0.0208 88.72);
+  --popover-foreground: oklch(0.2070 0.0075 67.39);
+  --primary: oklch(0.5313 0.2015 5.62);
+  --primary-foreground: oklch(0.9708 0.0208 88.72);
+  --secondary: oklch(0.2070 0.0075 67.39);
+  --secondary-foreground: oklch(0.9708 0.0208 88.72);
+  --muted: oklch(0.9000 0.0240 86.87);
+  --muted-foreground: oklch(0.5292 0.0159 67.47);
+  --accent: oklch(0.8914 0.1588 93.22);
+  --accent-foreground: oklch(0.2070 0.0075 67.39);
+  --destructive: oklch(0.5313 0.2015 5.62);
+  --destructive-foreground: oklch(0.9708 0.0208 88.72);
+  --border: oklch(0.2070 0.0075 67.39);
+  --input: oklch(0.9708 0.0208 88.72);
+  --ring: oklch(0.5313 0.2015 5.62);
+  --sidebar: oklch(0.9708 0.0208 88.72);
+  --sidebar-foreground: oklch(0.2070 0.0075 67.39);
+  --sidebar-primary: oklch(0.5313 0.2015 5.62);
+  --sidebar-primary-foreground: oklch(0.9708 0.0208 88.72);
+  --sidebar-accent: oklch(0.8546 0.0943 193.85);
+  --sidebar-accent-foreground: oklch(0.2070 0.0075 67.39);
+  --sidebar-border: oklch(0.2070 0.0075 67.39);
+  --sidebar-ring: oklch(0.5313 0.2015 5.62);
+  --chart-1: oklch(0.5313 0.2015 5.62);
+  --chart-2: oklch(0.5400 0.1000 193.00);
+  --chart-3: oklch(0.5500 0.1500 50.00);
+  --chart-4: oklch(0.5200 0.1200 122.00);
+  --chart-5: oklch(0.4900 0.1400 320.00);
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --shadow-2xs: 3px 3px 0px 0px oklch(0.2070 0.0075 67.39 / 0.50);
+  --shadow-xs: 3px 3px 0px 0px oklch(0.2070 0.0075 67.39 / 0.50);
+  --shadow-sm: 3px 3px 0px 0px oklch(0.2070 0.0075 67.39), 3px 1px 2px -1px oklch(0.2070 0.0075 67.39);
+  --shadow-base: 4px 4px 0px 0px oklch(0.2070 0.0075 67.39), 3px 1px 2px -1px oklch(0.2070 0.0075 67.39);
+  --shadow-md: 4px 4px 0px 0px oklch(0.2070 0.0075 67.39), 3px 2px 4px -1px oklch(0.2070 0.0075 67.39);
+  --shadow-lg: 5px 5px 0px 0px oklch(0.2070 0.0075 67.39), 3px 4px 6px -1px oklch(0.2070 0.0075 67.39);
+  --shadow-xl: 6px 6px 0px 0px oklch(0.2070 0.0075 67.39), 3px 8px 10px -1px oklch(0.2070 0.0075 67.39);
+  --shadow-2xl: 6px 6px 0px 0px oklch(0.2070 0.0075 67.39);
+  --border-width-base: 2px;
+  --course-accent-0: oklch(0.5313 0.2015 5.62);
+  --course-accent-1: oklch(0.5400 0.1000 193.00);
+  --course-accent-2: oklch(0.5200 0.1200 122.00);
+  --course-accent-3: oklch(0.5500 0.1500 50.00);
+  --course-accent-4: oklch(0.4900 0.1400 320.00);
+  --course-accent-5: oklch(0.5200 0.0900 240.00);
+}
+
+/* The source zine draws a faint dot grid on the page. It is decorative only and
+   costs no request, so it ships as a gradient rather than an image. */
+[data-theme="zine"] body {
+  background-image: radial-gradient(oklch(0.2070 0.0075 67.39 / 0.035) 1px, transparent 1.2px);
+  background-size: 6px 6px;
+}
+
 :root {
   --font-sans-stack: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --font-serif-stack: 'Georgia', serif;

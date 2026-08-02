@@ -40,7 +40,7 @@ export function ThemePicker() {
       <legend className="mb-3 text-sm text-muted-foreground">
         선택한 테마는 이 브라우저에만 저장되며 학습 데이터에는 영향을 주지 않습니다.
       </legend>
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {THEMES.map((value) => (
           <label
             key={value}

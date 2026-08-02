@@ -1,4 +1,4 @@
-export const THEMES = ["focus", "calm", "focus-dark"] as const;
+export const THEMES = ["focus", "calm", "focus-dark", "zine"] as const;
 export type Theme = (typeof THEMES)[number];
 
 export const DEFAULT_THEME: Theme = "focus";
@@ -9,6 +9,7 @@ export const THEME_LABELS: Record<Theme, { name: string; description: string }> 
   focus: { name: "Focus", description: "높은 대비의 흑백과 빨강·노랑 강조. 기본값입니다." },
   calm: { name: "Calm", description: "따뜻한 중성색과 부드러운 경계. 오래 읽을 때 좋습니다." },
   "focus-dark": { name: "Focus Dark", description: "Focus와 같은 구조의 어두운 배경입니다." },
+  zine: { name: "Zine", description: "크림 종이에 분홍·하늘·노랑 스티커. Focus와 같은 구조입니다." },
 };
 
 export function normalizeTheme(value: unknown): Theme {
