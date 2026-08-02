@@ -43,6 +43,44 @@ test("names every approved tool and all research safety invariants", () => {
     assert.match(skill, new RegExp(phrase));
 });
 
+const escaped = (phrase: string) => new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
+test("pins the rules a real Codex run would otherwise have to guess", () => {
+  for (const phrase of [
+    // 드라이런에서 실제로 막힌 지점. 이 문장이 없으면 첫 approve_outline이 거부된다.
+    "unselected source reason must be null",
+    "Only selected sources carry a reason",
+    // 여섯 오류 코드 중 네 개는 대응 지침이 없으면 에이전트가 추측한다.
+    "On `VALIDATION`",
+    "On `STATE`",
+    "On `UNAVAILABLE` or `INTERNAL`",
+    "do not retry in a loop",
+    // 웹에서 먼저 답했을 수 있다는 사실을 모르면 답한 문항을 다시 묻는다.
+    "answer in the local dashboard",
+    "never re-ask an answered question",
+    // 기준을 낮추는 대신 major를 내리라는 지시.
+    "set `major: false`",
+  ])
+    assert.match(skill, escaped(phrase));
+});
+
+test("pins the multiple-choice quiz contract", () => {
+  for (const phrase of [
+    "four distinct single-line choices",
+    "zero-based `correctChoiceIndex`",
+    "plausible mistake, not filler",
+    "never reveal `correctChoiceIndex` before the learner answers",
+    "The server grades",
+    "never state a result you decided yourself",
+    "There is no clarification round",
+  ])
+    assert.match(skill, escaped(phrase));
+  // 옛 서술형 계약이 되살아나면 걸린다.
+  for (const gone of ["grade_quiz", "needs_clarification", "gradingCriteria"]) {
+    assert.equal(skill.includes(gone), false, gone);
+  }
+});
+
 test("pins the mutually exclusive checkpoint shapes and the health ok:false rule", () => {
   for (const phrase of [
     "must include both `understoodConcepts` and `remediationConcepts`",

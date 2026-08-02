@@ -13,8 +13,9 @@ Use the local `just-study` MCP as the only source of persisted course state. Per
 2. Use the latest saved `revision` for every write except `create_course`.
 3. On `REVISION_CONFLICT`, read state again and explain the conflict. Do not replay the write automatically.
 4. On `STORAGE_CORRUPT`, stop. Do not overwrite or attempt repair through MCP.
-5. Follow the saved current Day and stage. Do not skip research, quiz mastery, remediation, or reflection.
-6. Never invent a source, URL, quote, learner answer, grade, approval, or completed activity.
+5. On `VALIDATION`, the payload broke a rule. Read the message, fix the payload, and call again — do not work around the rule or drop the field. On `STATE`, you called a tool the saved stage does not allow; re-read state and resume the stage it reports. On `UNAVAILABLE` or `INTERNAL`, stop and tell the user; do not retry in a loop.
+6. Follow the saved current Day and stage. Do not skip research, quiz mastery, remediation, or reflection.
+7. Never invent a source, URL, quote, learner answer, grade, approval, or completed activity.
 
 ## Choose a flow
 
@@ -39,6 +40,8 @@ Before `approve_outline` or `record_daily_research`, use simple unique local key
 - Use keys such as `s-1` and `c-1` for `sources[].id` and `claims[].id`; do not use titles or URLs as keys.
 - Set each `claims[].evidence[].sourceId` to exactly reuse that source key from `sources[].id`.
 - The server stores and returns canonical UUIDs, so do not generate research UUIDs or use `crypto` for these nested keys.
+- A source with `selected: false` must send `selectionReason: null`. The server rejects a reason on an unselected source with `VALIDATION: unselected source reason must be null`. Put why it lost in `limitation`, or leave both null. Only selected sources carry a reason.
+- `claims[].evidence[]` may only cite selected sources. A major claim needs two of them scoring 80 or more with different independence keys; if you cannot reach two, set `major: false` and record the shortfall in `uncertainty` rather than lowering the bar.
 
 ## Resume by stage
 
@@ -51,7 +54,7 @@ Before `approve_outline` or `record_daily_research`, use simple unique local key
 
 ### Quiz
 
-1. Read the saved current attempt and present the first question that has no `response`.
+1. Read the saved current attempt and present the first question that has no `response`. The learner can also answer in the local dashboard, so some questions may already be answered when you arrive, and the stage may have moved on entirely. Resume from what the server reports; never re-ask an answered question.
 2. Show the saved `choices` exactly as stored, numbered 1 to 4 in stored order. Never reorder, reword, add, or drop a choice, and never reveal `correctChoiceIndex` before the learner answers.
 3. Take the learner's pick and call `answer_quiz` with its zero-based `selectedChoiceIndex`. Never answer on the learner's behalf.
 4. **The server grades.** It compares the pick against the stored answer key and returns the result. Report only what it returned; never state a result you decided yourself. Then present the saved `explanation` and move to the next unanswered question.
