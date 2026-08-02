@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 400" width="1280" height="400" role="img" aria-label="just-study — 주제만 정하면 에이전트가 자료를 조사해 30일 과정을 만듭니다">
+  <title>just-study</title>
+
+  <!-- Focus theme: white paper, black ink, red primary, yellow accent, zero radius. -->
+  <rect width="1280" height="400" fill="#ffffff"/>
+  <rect x="0" y="0" width="1280" height="400" fill="none" stroke="#000000" stroke-width="16"/>
+
+  <!-- hard-offset accent block behind the wordmark -->
+  <rect x="88" y="96" width="404" height="92" fill="#ffd84a"/>
+
+  <text x="76" y="170"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="86" font-weight="800" letter-spacing="-3" fill="#000000">just-study</text>
+
+  <text x="78" y="228"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="27" font-weight="600" fill="#000000">주제만 정하면, 에이전트가 자료를 조사해 30일 과정을 만듭니다.</text>
+
+  <text x="78" y="268"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="19" font-weight="400" fill="#4a4a4a">자료를 모으는 사람은 당신이 아닙니다. 읽고, 답하고, 넘어가면 됩니다.</text>
+
+  <!-- stack chips -->
+  <g font-family="'SF Mono', 'Courier New', monospace" font-size="15" font-weight="600">
+    <rect x="78"  y="304" width="132" height="38" fill="#ffffff" stroke="#000000" stroke-width="3"/>
+    <text x="144" y="329" fill="#000000" text-anchor="middle">SELF-HOST</text>
+
+    <rect x="222" y="304" width="112" height="38" fill="#ffffff" stroke="#000000" stroke-width="3"/>
+    <text x="278" y="329" fill="#000000" text-anchor="middle">SQLITE</text>
+
+    <rect x="346" y="304" width="132" height="38" fill="#ffffff" stroke="#000000" stroke-width="3"/>
+    <text x="412" y="329" fill="#000000" text-anchor="middle">MARKDOWN</text>
+
+    <rect x="490" y="304" width="86" height="38" fill="#c60000"/>
+    <text x="533" y="329" fill="#ffffff" text-anchor="middle">MCP</text>
+
+    <rect x="588" y="304" width="126" height="38" fill="#ffffff" stroke="#000000" stroke-width="3"/>
+    <text x="651" y="329" fill="#000000" text-anchor="middle">127.0.0.1</text>
+  </g>
+
+  <!-- 30-day grid: 3 done, 1 current, rest ahead -->
+  <g transform="translate(830, 96)">
+    <text x="0" y="-14"
+          font-family="'SF Mono', 'Courier New', monospace"
+          font-size="14" font-weight="600" letter-spacing="2" fill="#4a4a4a">30 DAYS</text>
+
+    <g stroke="#000000" stroke-width="3">
+      <rect x="0"   y="0" width="52" height="40" fill="#c60000"/>
+      <rect x="60"  y="0" width="52" height="40" fill="#c60000"/>
+      <rect x="120" y="0" width="52" height="40" fill="#c60000"/>
+      <rect x="180" y="0" width="52" height="40" fill="#ffd84a"/>
+      <rect x="240" y="0" width="52" height="40" fill="#ffffff"/>
+      <rect x="300" y="0" width="52" height="40" fill="#ffffff"/>
+
+      <rect x="0"   y="52" width="52" height="40" fill="#ffffff"/>
+      <rect x="60"  y="52" width="52" height="40" fill="#ffffff"/>
+      <rect x="120" y="52" width="52" height="40" fill="#ffffff"/>
+      <rect x="180" y="52" width="52" height="40" fill="#ffffff"/>
+      <rect x="240" y="52" width="52" height="40" fill="#ffffff"/>
+      <rect x="300" y="52" width="52" height="40" fill="#ffffff"/>
+
+      <rect x="0"   y="104" width="52" height="40" fill="#ffffff"/>
+      <rect x="60"  y="104" width="52" height="40" fill="#ffffff"/>
+      <rect x="120" y="104" width="52" height="40" fill="#ffffff"/>
+      <rect x="180" y="104" width="52" height="40" fill="#ffffff"/>
+      <rect x="240" y="104" width="52" height="40" fill="#ffffff"/>
+      <rect x="300" y="104" width="52" height="40" fill="#ffffff"/>
+    </g>
+
+    <text x="0" y="176"
+          font-family="'SF Mono', 'Courier New', monospace"
+          font-size="14" fill="#4a4a4a">Day 4 · 퀴즈 5/5를 맞혀야 다음 날로</text>
+  </g>
+</svg>
