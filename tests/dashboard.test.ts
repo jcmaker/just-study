@@ -59,6 +59,7 @@ import { renderApprovedCourseMarkdown } from "../src/server/learning-markdown.ts
 import { listTemporaryEntries, StorageError } from "../src/server/storage.ts";
 import {
   applyTheme,
+  DARK_THEMES,
   DEFAULT_THEME,
   normalizeTheme,
   THEMES,
@@ -885,7 +886,7 @@ test("parser keeps every malformed-table cell as literal text", () => {
 });
 
 test("theme values are validated and default to focus", () => {
-  assert.deepEqual([...THEMES], ["focus", "calm", "focus-dark", "zine"]);
+  assert.deepEqual([...THEMES], ["focus", "calm", "focus-dark", "bubblegum", "terminal"]);
   assert.equal(DEFAULT_THEME, "focus");
   assert.equal(THEME_STORAGE_KEY, "just-study:theme");
   // 라벨은 테마 목록과 정확히 일대일이어야 한다. 테마를 늘리면 여기서 먼저 걸린다.
@@ -896,10 +897,22 @@ test("theme values are validated and default to focus", () => {
   }
 });
 
-test("theme attributes map focus-dark to the dark class and color scheme", () => {
+test("theme attributes mark every dark theme and leave the light ones alone", () => {
   assert.deepEqual(themeAttributes("focus"), { theme: "focus", dark: false, colorScheme: "light" });
   assert.deepEqual(themeAttributes("calm"), { theme: "calm", dark: false, colorScheme: "light" });
-  assert.deepEqual(themeAttributes("focus-dark"), { theme: "focus-dark", dark: true, colorScheme: "dark" });
+  assert.deepEqual(themeAttributes("bubblegum"), { theme: "bubblegum", dark: false, colorScheme: "light" });
+  // 어두운 테마는 목록으로 관리한다. 새 dark 테마를 목록에 넣지 않으면 여기서 걸린다.
+  assert.deepEqual([...DARK_THEMES], ["focus-dark", "terminal"]);
+  for (const theme of THEMES) {
+    const expected = DARK_THEMES.includes(theme);
+    assert.deepEqual(
+      themeAttributes(theme),
+      { theme, dark: expected, colorScheme: expected ? "dark" : "light" },
+      theme,
+    );
+    // 부트스트랩 스크립트도 같은 목록을 써야 첫 페인트가 어긋나지 않는다.
+    assert.equal(THEME_BOOTSTRAP_SCRIPT.includes(JSON.stringify(DARK_THEMES)), true);
+  }
 });
 
 test("applyTheme writes exactly the documented DOM state", () => {

@@ -173,7 +173,7 @@
   --course-accent-5: oklch(0.7400 0.1100 200.0000);
 }
 
-/* Zine: cream paper with pink/cyan/yellow stickers. Same neo-brutalist
+/* Bubblegum: cream paper with pink/cyan/yellow stickers. Same neo-brutalist
    construction as Focus (0 radius, hard offset shadow, 2px ink border), so it
    swaps only custom properties and reuses the exact component tree.
 
@@ -183,7 +183,7 @@
    reaching 5.40:1 for button text and 4.99:1 as a ring, so accessibility wins
    over a verbatim copy. The bright pink stays available as a surface colour
    where ink sits on top (7.34:1). */
-[data-theme="zine"] {
+[data-theme="bubblegum"] {
   --background: oklch(0.9445 0.0253 86.87);
   --foreground: oklch(0.2070 0.0075 67.39);
   --card: oklch(0.9708 0.0208 88.72);
@@ -239,9 +239,75 @@
 
 /* The source zine draws a faint dot grid on the page. It is decorative only and
    costs no request, so it ships as a gradient rather than an image. */
-[data-theme="zine"] body {
+[data-theme="bubblegum"] body {
   background-image: radial-gradient(oklch(0.2070 0.0075 67.39 / 0.035) 1px, transparent 1.2px);
   background-size: 6px 6px;
+}
+
+/* Terminal: phosphor green on black, everything monospace and square.
+
+   Three values differ from the source. Its --border sits at 1.63:1 against the
+   background and its --input is the same pure black as the page, which leaves
+   text fields with no visible edge; the border moves to L 0.48 for 3.41:1 and
+   the input fill lifts to L 0.18 so a field reads as a field. Its
+   white-on-destructive is 4.00:1, the same shortfall Focus Dark documents, so
+   destructive text is black at 5.25:1.
+
+   The source asks for VT323 from Google Fonts. Remote fonts are out of scope,
+   so the theme points the sans stack at the existing monospace stack instead —
+   the squared-off feel comes from the fallback chain, not a download. */
+[data-theme="terminal"] {
+  --background: oklch(0 0 0);
+  --foreground: oklch(0.8686 0.2776 144.4661);
+  --card: oklch(0.1149 0 0);
+  --card-foreground: oklch(0.8686 0.2776 144.4661);
+  --popover: oklch(0.1149 0 0);
+  --popover-foreground: oklch(0.8686 0.2776 144.4661);
+  --primary: oklch(0.8686 0.2776 144.4661);
+  --primary-foreground: oklch(0 0 0);
+  --secondary: oklch(0.3053 0.1039 142.4953);
+  --secondary-foreground: oklch(0.8686 0.2776 144.4661);
+  --muted: oklch(0.1887 0.0642 142.4953);
+  --muted-foreground: oklch(0.5638 0.1872 143.2450);
+  --accent: oklch(0.8686 0.2776 144.4661);
+  --accent-foreground: oklch(0 0 0);
+  --destructive: oklch(0.6280 0.2577 29.2339);
+  --destructive-foreground: oklch(0 0 0);
+  --border: oklch(0.4800 0.1400 143.0000);
+  --input: oklch(0.1800 0.0500 143.0000);
+  --ring: oklch(0.8686 0.2776 144.4661);
+  --sidebar: oklch(0.1149 0 0);
+  --sidebar-foreground: oklch(0.8686 0.2776 144.4661);
+  --sidebar-primary: oklch(0.8686 0.2776 144.4661);
+  --sidebar-primary-foreground: oklch(0 0 0);
+  --sidebar-accent: oklch(0.3053 0.1039 142.4953);
+  --sidebar-accent-foreground: oklch(0.8686 0.2776 144.4661);
+  --sidebar-border: oklch(0.4800 0.1400 143.0000);
+  --sidebar-ring: oklch(0.8686 0.2776 144.4661);
+  --chart-1: oklch(0.8686 0.2776 144.4661);
+  --chart-2: oklch(0.5638 0.1872 143.2450);
+  --chart-3: oklch(0.7400 0.1600 120.0000);
+  --chart-4: oklch(0.7000 0.1400 170.0000);
+  --chart-5: oklch(0.8000 0.1500 100.0000);
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --shadow-2xs: 0px 0px 10px 1px hsl(135.2941 100% 50% / 0.10);
+  --shadow-xs: 0px 0px 10px 1px hsl(135.2941 100% 50% / 0.10);
+  --shadow-sm: 0px 0px 10px 1px hsl(135.2941 100% 50% / 0.20), 0px 1px 2px 0px hsl(135.2941 100% 50% / 0.20);
+  --shadow-base: 0px 0px 10px 1px hsl(135.2941 100% 50% / 0.20), 0px 1px 2px 0px hsl(135.2941 100% 50% / 0.20);
+  --shadow-md: 0px 0px 10px 1px hsl(135.2941 100% 50% / 0.20), 0px 2px 4px 0px hsl(135.2941 100% 50% / 0.20);
+  --shadow-lg: 0px 0px 10px 1px hsl(135.2941 100% 50% / 0.20), 0px 4px 6px 0px hsl(135.2941 100% 50% / 0.20);
+  --shadow-xl: 0px 0px 10px 1px hsl(135.2941 100% 50% / 0.20), 0px 8px 10px 0px hsl(135.2941 100% 50% / 0.20);
+  --shadow-2xl: 0px 0px 10px 1px hsl(135.2941 100% 50% / 0.50);
+  --border-width-base: 1px;
+  --course-accent-0: oklch(0.8686 0.2776 144.4661);
+  --course-accent-1: oklch(0.7400 0.1600 120.0000);
+  --course-accent-2: oklch(0.7000 0.1400 170.0000);
+  --course-accent-3: oklch(0.8000 0.1500 100.0000);
+  --course-accent-4: oklch(0.7600 0.1300 190.0000);
+  --course-accent-5: oklch(0.6800 0.1500 135.0000);
 }
 
 :root {
@@ -249,6 +315,14 @@
   --font-serif-stack: 'Georgia', serif;
   --font-mono-stack: 'SF Mono', 'Courier New', monospace;
   --tracking-base: -0.02em;
+}
+
+/* Terminal puts the whole shell in monospace with wider tracking; that is what
+   makes it read as a terminal rather than just another dark theme. The selector
+   carries an extra attribute so it outranks the :root defaults above. */
+:root[data-theme="terminal"] {
+  --font-sans-stack: var(--font-mono-stack);
+  --tracking-base: 0.06em;
 }
 
 @theme inline {

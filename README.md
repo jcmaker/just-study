@@ -139,7 +139,9 @@ yet.
 
 ### 테마
 
-Focus(기본), Calm, Focus Dark 세 가지를 제공합니다. 선택값은 이 브라우저의
+Focus(기본), Calm, Focus Dark, Bubblegum, Terminal 다섯 가지를 제공합니다.
+Focus Dark와 Terminal은 어두운 테마이며 Terminal은 화면 전체가 고정폭
+글꼴입니다. 선택값은 이 브라우저의
 `localStorage` 키 `just-study:theme`에만 저장되며 학습 데이터에는 영향을 주지
 않습니다. 저장값을 읽지 못하면 Focus로 표시합니다.
 

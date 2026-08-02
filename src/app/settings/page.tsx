@@ -17,7 +17,7 @@ export default function SettingsPage() {
       <p className="mt-0 mb-6 text-muted-foreground">이 컴퓨터에서만 사용하는 화면 설정과 시스템 상태입니다.</p>
 
       <Card className="mb-4">
-        <CardHeader title="테마" description="세 테마는 같은 화면 구조를 사용하며 색과 모서리만 달라집니다." />
+        <CardHeader title="테마" description="모든 테마는 같은 화면 구조를 사용하며 색과 모서리, 글꼴만 달라집니다." />
         <ThemePicker />
       </Card>
 
