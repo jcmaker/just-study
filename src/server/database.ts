@@ -1,11 +1,90 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-
-import Database from "better-sqlite3";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 
 export const SCHEMA_VERSION = 3;
-export type DatabaseHandle = Database.Database;
+
+// SQLITE_CONSTRAINT_UNIQUE. node:sqlite reports every failure as ERR_SQLITE_ERROR
+// and carries the specific cause in `errcode`, so callers branch on this instead.
+export const SQLITE_CONSTRAINT_UNIQUE = 2067;
+
+export type DatabaseHandle = {
+  prepare(sql: string): StatementSync;
+  exec(sql: string): void;
+  close(): void;
+  readonly open: boolean;
+  pragma(source: string, options?: { simple?: boolean }): unknown;
+  transaction<T>(body: () => T): () => T;
+};
+
+// node:sqlite covers prepare/exec/close directly. The three members below exist
+// only in better-sqlite3, which this used to depend on; keeping their shapes lets
+// every call site stay as it was while the native dependency goes away — that
+// dependency needed a compiler, and plugin installs run with --ignore-scripts.
+export function wrapDatabase(db: DatabaseSync): DatabaseHandle {
+  let depth = 0;
+
+  return {
+    prepare: (sql) => db.prepare(sql),
+    exec: (sql) => db.exec(sql),
+    close: () => db.close(),
+    get open() {
+      return db.isOpen;
+    },
+
+    pragma(source, options) {
+      const rows = db.prepare(`PRAGMA ${source}`).all() as Record<string, unknown>[];
+      if (options?.simple !== true) return rows;
+      const first = rows[0];
+      return first === undefined ? undefined : Object.values(first)[0];
+    },
+
+    transaction<T>(body: () => T): () => T {
+      return () => {
+        // Nested calls use a savepoint so an inner failure cannot commit the outer work.
+        const savepoint = depth > 0 ? `just_study_sp_${depth}` : null;
+
+        const undo = () => {
+          try {
+            if (savepoint === null) db.exec("ROLLBACK");
+            else {
+              // ROLLBACK TO leaves the savepoint on the stack; RELEASE pops it.
+              db.exec(`ROLLBACK TO ${savepoint}`);
+              db.exec(`RELEASE ${savepoint}`);
+            }
+          } catch {
+            /* The original failure is the one worth reporting. */
+          }
+        };
+
+        db.exec(savepoint === null ? "BEGIN" : `SAVEPOINT ${savepoint}`);
+        depth += 1;
+
+        let result: T;
+        try {
+          result = body();
+        } catch (error) {
+          depth -= 1;
+          undo();
+          throw error;
+        }
+
+        depth -= 1;
+        try {
+          db.exec(savepoint === null ? "COMMIT" : `RELEASE ${savepoint}`);
+        } catch (error) {
+          // A deferred constraint fails here, and SQLite leaves the transaction
+          // open when it refuses the COMMIT. Without this the work would stay
+          // pending and the next statement would silently join it.
+          undo();
+          throw error;
+        }
+
+        return result;
+      };
+    },
+  };
+}
 
 const INITIAL_SCHEMA = `
   CREATE TABLE courses (
@@ -289,7 +368,7 @@ function migrateDatabase(db: DatabaseHandle): void {
 
 export function openDatabase(dataRoot: string): DatabaseHandle {
   mkdirSync(dataRoot, { recursive: true });
-  const db = new Database(join(dataRoot, "just-study.sqlite"));
+  const db = wrapDatabase(new DatabaseSync(join(dataRoot, "just-study.sqlite")));
 
   try {
     const current = db.pragma("user_version", { simple: true }) as number;
@@ -320,5 +399,5 @@ export function openDatabaseReadOnly(dataRoot: string): DatabaseHandle {
 
   const source = `file:${databasePath}?immutable=1`;
   // Sidecars are rejected above; immutable clean-store reads avoid creating them.
-  return new DatabaseSync(source, { readOnly: true }) as unknown as DatabaseHandle;
+  return wrapDatabase(new DatabaseSync(source, { readOnly: true }));
 }

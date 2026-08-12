@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 
 import { UUID_PATTERN, createCourse } from "../src/server/courses.ts";
 import {
@@ -36,6 +36,7 @@ import {
 } from "../src/server/learning.ts";
 import {
   openDatabase,
+  wrapDatabase,
   SCHEMA_VERSION,
   type DatabaseHandle,
 } from "../src/server/database.ts";
@@ -328,7 +329,7 @@ function terminalAnswers(attempt: QuizAttempt, incorrectPosition?: number): Ques
 
 function seedVersionOne(dataRoot: string): string {
   const databasePath = join(dataRoot, "just-study.sqlite");
-  const seeded = new Database(databasePath);
+  const seeded = wrapDatabase(new DatabaseSync(databasePath));
   seeded.exec(`
     CREATE TABLE courses (
       id TEXT PRIMARY KEY,
@@ -448,31 +449,31 @@ test("rolls back a forced version-2 migration failure", { concurrency: false }, 
   const dataRoot = mkdtempSync(join(tmpdir(), "just-study-v1-failure-"));
   const path = seedVersionOne(dataRoot);
 
-  const originalPragma = Database.prototype.pragma;
-  const originalClose = Database.prototype.close;
+  // 어댑터의 pragma는 PRAGMA 문을 prepare로 실행한다.
+  const originalPrepare = DatabaseSync.prototype.prepare;
+  const originalClose = DatabaseSync.prototype.close;
   let closed = false;
-  Database.prototype.pragma = function (
-    this: Database.Database,
-    source: string,
-    options?: Database.PragmaOptions,
-  ): unknown {
-    if (source === "user_version = 2") throw new Error("forced v2 migration failure");
-    return originalPragma.call(this, source, options);
+  DatabaseSync.prototype.prepare = function (
+    this: DatabaseSync,
+    sql: string,
+  ): ReturnType<DatabaseSync["prepare"]> {
+    if (sql === "PRAGMA user_version = 2") throw new Error("forced v2 migration failure");
+    return originalPrepare.call(this, sql);
   };
-  Database.prototype.close = function (this: Database.Database): Database.Database {
+  DatabaseSync.prototype.close = function (this: DatabaseSync): void {
     closed = true;
-    return originalClose.call(this);
+    originalClose.call(this);
   };
 
   try {
     assert.throws(() => openDatabase(dataRoot), /forced v2 migration failure/);
     assert.equal(closed, true);
   } finally {
-    Database.prototype.pragma = originalPragma;
-    Database.prototype.close = originalClose;
+    DatabaseSync.prototype.prepare = originalPrepare;
+    DatabaseSync.prototype.close = originalClose;
   }
 
-  const db = new Database(path);
+  const db = wrapDatabase(new DatabaseSync(path));
   try {
     assert.equal(db.pragma("user_version", { simple: true }), 1);
     const columns = (

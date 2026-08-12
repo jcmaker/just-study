@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { DatabaseHandle } from "./database.ts";
+import { SQLITE_CONSTRAINT_UNIQUE, type DatabaseHandle } from "./database.ts";
 import {
   discardCourseDraft,
   finalizeCourseFiles,
@@ -169,7 +169,7 @@ function findByRequestId(db: DatabaseHandle, requestId: string): Course | null {
 function isRequestIdUniqueConstraint(error: unknown): boolean {
   return (
     error instanceof Error &&
-    (error as Error & { code?: unknown }).code === "SQLITE_CONSTRAINT_UNIQUE" &&
+    (error as Error & { errcode?: unknown }).errcode === SQLITE_CONSTRAINT_UNIQUE &&
     error.message === "UNIQUE constraint failed: courses.request_id"
   );
 }

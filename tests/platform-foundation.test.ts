@@ -18,7 +18,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
@@ -37,7 +37,7 @@ import {
   getCourseDocument,
   listCourses,
 } from "../src/server/courses.ts";
-import { openDatabase, SCHEMA_VERSION } from "../src/server/database.ts";
+import { openDatabase, wrapDatabase, SCHEMA_VERSION, type DatabaseHandle } from "../src/server/database.ts";
 import { getHealth } from "../src/server/health.ts";
 import { getReadOnlyRuntime, getRuntime, requireDatabase } from "../src/server/runtime.ts";
 import {
@@ -80,7 +80,7 @@ function databasePath(dataRoot: string): string {
   return join(dataRoot, "just-study.sqlite");
 }
 
-function coursesTable(db: Database.Database): { name: string } | undefined {
+function coursesTable(db: DatabaseHandle): { name: string } | undefined {
   return db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'courses'")
     .get() as { name: string } | undefined;
@@ -107,7 +107,7 @@ test("migrates an empty SQLite database", () => {
 test("rejects a newer schema without changing its database", () => {
   const dataRoot = makeDataRoot();
   const path = databasePath(dataRoot);
-  const seeded = new Database(path);
+  const seeded = wrapDatabase(new DatabaseSync(path));
 
   try {
     seeded.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
@@ -122,7 +122,7 @@ test("rejects a newer schema without changing its database", () => {
       new RegExp(`Database schema ${SCHEMA_VERSION + 1} is newer than supported ${SCHEMA_VERSION}`),
     );
 
-    const db = new Database(path);
+    const db = wrapDatabase(new DatabaseSync(path));
     try {
       assert.equal(db.pragma("user_version", { simple: true }), SCHEMA_VERSION + 1);
       assert.equal(db.pragma("journal_mode", { simple: true }), "delete");
@@ -138,31 +138,32 @@ test("rejects a newer schema without changing its database", () => {
 test("rolls back a forced initial migration failure and closes the database", () => {
   const dataRoot = makeDataRoot();
   const path = databasePath(dataRoot);
-  const originalPragma = Database.prototype.pragma;
-  const originalClose = Database.prototype.close;
+  // 어댑터의 pragma는 PRAGMA 문을 prepare로 실행한다. 그 지점을 가로채면
+  // 첫 마이그레이션 도중 실패를 강제할 수 있다.
+  const originalPrepare = DatabaseSync.prototype.prepare;
+  const originalClose = DatabaseSync.prototype.close;
   let closed = false;
 
-  Database.prototype.pragma = function (
-    this: Database.Database,
-    source: string,
-    options?: Database.PragmaOptions,
-  ): unknown {
-    if (source === "user_version = 1") {
+  DatabaseSync.prototype.prepare = function (
+    this: DatabaseSync,
+    sql: string,
+  ): ReturnType<DatabaseSync["prepare"]> {
+    if (sql === "PRAGMA user_version = 1") {
       throw new Error("forced migration failure");
     }
 
-    return originalPragma.call(this, source, options);
+    return originalPrepare.call(this, sql);
   };
-  Database.prototype.close = function (this: Database.Database): Database.Database {
+  DatabaseSync.prototype.close = function (this: DatabaseSync): void {
     closed = true;
-    return originalClose.call(this);
+    originalClose.call(this);
   };
 
   try {
     assert.throws(() => openDatabase(dataRoot), /forced migration failure/);
     assert.equal(closed, true);
 
-    const db = new Database(path);
+    const db = wrapDatabase(new DatabaseSync(path));
     try {
       assert.equal(db.pragma("user_version", { simple: true }), 0);
       assert.equal(coursesTable(db), undefined);
@@ -170,8 +171,8 @@ test("rolls back a forced initial migration failure and closes the database", ()
       db.close();
     }
   } finally {
-    Database.prototype.pragma = originalPragma;
-    Database.prototype.close = originalClose;
+    DatabaseSync.prototype.prepare = originalPrepare;
+    DatabaseSync.prototype.close = originalClose;
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
@@ -1003,7 +1004,7 @@ function clearTestRuntime(): void {
 
 function setTestRuntime(
   dataRoot: string,
-  db: Database.Database | null,
+  db: DatabaseHandle | null,
 ): void {
   (globalThis as TestRuntimeGlobal).__justStudyRuntime = { dataRoot, db };
 }
@@ -1088,6 +1089,26 @@ test("keeps one hot-reload-safe runtime for the configured data root", () => {
   }
 });
 
+test("keeps the dependency tree free of anything that needs compiling", () => {
+  // 플러그인 설치는 --ignore-scripts로 돈다. 네이티브 모듈이 하나라도 들어오면
+  // 빌드가 빠진 채 설치되고, 서버는 뜨지만 DB에 붙지 못한다.
+  const pkg = JSON.parse(
+    readFileSync(resolve(import.meta.dirname, "..", "package.json"), "utf8"),
+  ) as { dependencies: Record<string, string>; devDependencies: Record<string, string> };
+
+  for (const group of [pkg.dependencies, pkg.devDependencies]) {
+    assert.equal(Object.hasOwn(group, "better-sqlite3"), false);
+    assert.equal(Object.hasOwn(group, "@types/better-sqlite3"), false);
+  }
+
+  const source = readFileSync(
+    resolve(import.meta.dirname, "..", "src/server/database.ts"),
+    "utf8",
+  );
+  assert.match(source, /from "node:sqlite"/);
+  assert.equal(/^import .* from "better-sqlite3";$/m.test(source), false);
+});
+
 test("anchors the default data root to the home directory, not the working directory", () => {
   // cwd 기준이면 레포에서 띄울 때와 플러그인 캐시에서 띄울 때 저장소가 갈린다.
   const previous = process.env.JUST_STUDY_DATA_DIR;
@@ -1110,7 +1131,7 @@ test("anchors the default data root to the home directory, not the working direc
 
 test("keeps runtime and storage health available after database startup failure", () => {
   const dataRoot = makeDataRoot();
-  const seeded = new Database(databasePath(dataRoot));
+  const seeded = wrapDatabase(new DatabaseSync(databasePath(dataRoot)));
   const previous = process.env.JUST_STUDY_DATA_DIR;
   seeded.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
   seeded.close();

@@ -7,7 +7,7 @@
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-22.23.1%2B-000?style=flat-square">
   <img alt="storage" src="https://img.shields.io/badge/storage-SQLite%20%2B%20Markdown-000?style=flat-square">
   <img alt="MCP" src="https://img.shields.io/badge/MCP-12%20tools-c60000?style=flat-square">
-  <img alt="tests" src="https://img.shields.io/badge/tests-267%20passing-000?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-268%20passing-000?style=flat-square">
 </p>
 
 <p align="center">
@@ -223,13 +223,15 @@ Do not copy `just-study.sqlite` alone while the app is running in WAL mode. Safe
 ## Development
 
 ```bash
-npm test          # Node's built-in test runner, 267 tests
+npm test          # Node's built-in test runner, 268 tests
 npm run lint
 npx tsc --noEmit
 npm run build
 ```
 
 Dependencies stay minimal. No ORM, no state management library, no test framework, no chart or date library. No remote fonts either.
+
+SQLite comes from Node's built-in `node:sqlite`, so **nothing in the tree needs compiling**. Plugin installs run with `--ignore-scripts`, and a native module installed that way arrives unbuilt — the server starts but never reaches the database. `node:sqlite` is marked experimental on Node 22.23.1 and prints one warning line at startup.
 
 ### About the dependency overrides
 

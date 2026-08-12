@@ -7,7 +7,7 @@
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-22.23.1%2B-000?style=flat-square">
   <img alt="storage" src="https://img.shields.io/badge/storage-SQLite%20%2B%20Markdown-000?style=flat-square">
   <img alt="MCP" src="https://img.shields.io/badge/MCP-12%20tools-c60000?style=flat-square">
-  <img alt="tests" src="https://img.shields.io/badge/tests-267%20passing-000?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-268%20passing-000?style=flat-square">
 </p>
 
 <p align="center">
@@ -235,13 +235,15 @@ WAL 모드로 도는 중에 `just-study.sqlite` 하나만 복사하면 안 됩�
 ## 개발
 
 ```bash
-npm test          # Node 표준 테스트 러너, 267개
+npm test          # Node 표준 테스트 러너, 268개
 npm run lint
 npx tsc --noEmit
 npm run build
 ```
 
 의존성을 최소로 유지합니다. ORM, 상태 관리 라이브러리, 테스트 프레임워크, 차트 라이브러리, 날짜 라이브러리를 쓰지 않습니다. 원격 폰트도 내려받지 않습니다.
+
+SQLite는 Node에 내장된 `node:sqlite`를 씁니다. **컴파일이 필요한 의존성이 하나도 없습니다.** 플러그인 설치는 `--ignore-scripts`로 도는데, 네이티브 모듈이 있으면 빌드가 빠진 채 설치돼 서버가 DB에 붙지 못합니다. `node:sqlite`는 Node 22.23.1에서 실험적 기능으로 표시되며 실행 시 경고를 한 줄 출력합니다.
 
 ### 의존성 override에 관해
 
