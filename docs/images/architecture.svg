@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 656" width="1280" height="656" role="img" aria-label="구조: 에이전트만 외부 웹에 접근해 자료를 조사하고 강의와 출제를 담당합니다. MCP 서버는 검증·저장·채점만 하며 LLM을 호출하거나 웹을 검색하지 않습니다. 저장소는 홈 디렉터리의 SQLite와 Markdown이고, 대시보드는 같은 서버를 읽는 두 번째 클라이언트입니다.">
+  <title>무엇이 어디서 도는가</title>
+
+  <!-- Focus theme: white paper, black ink, red primary, yellow accent, zero radius. -->
+  <rect width="1280" height="656" fill="#ffffff"/>
+  <rect x="0" y="0" width="1280" height="656" fill="none" stroke="#000000" stroke-width="16"/>
+
+  <g font-family="'SF Mono', 'Courier New', monospace" font-size="14" font-weight="600" letter-spacing="2">
+    <text x="76" y="66" fill="#4a4a4a">판단은 에이전트가, 저장과 검증은 서버가</text>
+  </g>
+
+  <!-- ── outside: the open web ──────────────────────────────────── -->
+  <rect x="76" y="92" width="264" height="72" fill="#ffffff" stroke="#000000" stroke-width="4" stroke-dasharray="10 6"/>
+  <text x="208" y="126" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="20" font-weight="800" fill="#000000" text-anchor="middle">외부 웹</text>
+  <text x="208" y="150" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#4a4a4a" text-anchor="middle">공식 문서 · 대학 강의 · 표준</text>
+
+  <!-- web → agent, the only line crossing the boundary -->
+  <path d="M208 164 V 232" stroke="#000000" stroke-width="4" fill="none"/>
+  <path d="M208 232 l -9 -16 h 18 z" fill="#000000"/>
+  <text x="228" y="204" font-family="'SF Mono', 'Courier New', monospace" font-size="13" font-weight="600" fill="#4a4a4a">열어 본 URL만</text>
+
+  <!-- ── the machine boundary ───────────────────────────────────── -->
+  <rect x="52" y="232" width="1176" height="310" fill="none" stroke="#000000" stroke-width="3" stroke-dasharray="12 8"/>
+  <rect x="52" y="232" width="230" height="30" fill="#000000"/>
+  <text x="66" y="253" font-family="'SF Mono', 'Courier New', monospace" font-size="14" font-weight="700" letter-spacing="1" fill="#ffffff">내 컴퓨터 · 127.0.0.1</text>
+
+  <g font-family="'Helvetica Neue', Helvetica, Arial, sans-serif">
+
+    <!-- 에이전트 -->
+    <rect x="84" y="286" width="284" height="132" fill="#ffd84a" stroke="#000000" stroke-width="4"/>
+    <text x="226" y="324" font-size="25" font-weight="800" fill="#000000" text-anchor="middle">에이전트</text>
+    <text x="226" y="350" font-size="13" font-weight="600" fill="#000000" text-anchor="middle" font-family="'SF Mono', 'Courier New', monospace">CODEX · CLAUDE CODE</text>
+    <text x="226" y="378" font-size="14" font-weight="400" fill="#000000" text-anchor="middle">리서치 · 강의 · 문제 출제</text>
+    <text x="226" y="400" font-size="14" font-weight="700" fill="#000000" text-anchor="middle">여기에 LLM이 있다</text>
+
+    <!-- agent → server -->
+    <path d="M368 352 H 462" stroke="#000000" stroke-width="4" fill="none"/>
+    <path d="M462 352 l -16 -9 v 18 z" fill="#000000"/>
+    <text x="415" y="338" font-size="13" font-weight="700" fill="#000000" text-anchor="middle" font-family="'SF Mono', 'Courier New', monospace">MCP</text>
+
+    <!-- MCP 서버 -->
+    <rect x="466" y="286" width="284" height="132" fill="#ffffff" stroke="#000000" stroke-width="4"/>
+    <text x="608" y="324" font-size="25" font-weight="800" fill="#000000" text-anchor="middle">MCP 서버</text>
+    <text x="608" y="350" font-size="13" font-weight="600" fill="#4a4a4a" text-anchor="middle" font-family="'SF Mono', 'Courier New', monospace">:5878 · 도구 12개</text>
+    <text x="608" y="378" font-size="14" font-weight="400" fill="#000000" text-anchor="middle">검증 · 저장 · 퀴즈 채점</text>
+    <text x="608" y="400" font-size="14" font-weight="400" fill="#000000" text-anchor="middle">revision 충돌 · 체크섬</text>
+
+    <!-- server → storage -->
+    <path d="M750 352 H 844" stroke="#000000" stroke-width="4" fill="none"/>
+    <path d="M844 352 l -16 -9 v 18 z" fill="#000000"/>
+
+    <!-- 저장소 -->
+    <rect x="848" y="286" width="332" height="132" fill="#ffffff" stroke="#000000" stroke-width="4"/>
+    <text x="1014" y="322" font-size="25" font-weight="800" fill="#000000" text-anchor="middle">저장소</text>
+    <text x="1014" y="346" font-size="13" font-weight="600" fill="#4a4a4a" text-anchor="middle" font-family="'SF Mono', 'Courier New', monospace">~/.just-study/data</text>
+    <line x1="880" y1="362" x2="1148" y2="362" stroke="#000000" stroke-width="2"/>
+    <text x="1014" y="384" font-size="14" font-weight="400" fill="#000000" text-anchor="middle">SQLite — 상태 · 퀴즈 정답 · 점수</text>
+    <text x="1014" y="404" font-size="14" font-weight="400" fill="#000000" text-anchor="middle">Markdown — 리서치 · 강의 · 회고</text>
+
+    <!-- 대시보드: a second client of the same server -->
+    <rect x="84" y="452" width="284" height="62" fill="#ffffff" stroke="#000000" stroke-width="4"/>
+    <text x="226" y="478" font-size="19" font-weight="800" fill="#000000" text-anchor="middle">대시보드</text>
+    <text x="226" y="500" font-size="13" font-weight="400" fill="#4a4a4a" text-anchor="middle">같은 저장소를 읽는 두 번째 클라이언트</text>
+
+    <path d="M368 483 H 608 V 422" stroke="#000000" stroke-width="4" fill="none"/>
+    <path d="M608 422 l -9 16 h 18 z" fill="#000000"/>
+  </g>
+
+  <!-- ── the load-bearing claim ─────────────────────────────────── -->
+  <g font-family="'Helvetica Neue', Helvetica, Arial, sans-serif">
+    <rect x="76" y="564" width="1128" height="64" fill="#c60000"/>
+    <text x="640" y="592" font-size="19" font-weight="800" fill="#ffffff" text-anchor="middle">서버는 LLM을 호출하지 않고 웹을 검색하지 않습니다</text>
+    <text x="640" y="614" font-size="14" font-weight="400" fill="#ffffff" text-anchor="middle">점선 밖으로 나가는 연결은 에이전트의 리서치 하나뿐입니다. 지어낸 출처가 저장될 수 없는 이유입니다.</text>
+  </g>
+</svg>

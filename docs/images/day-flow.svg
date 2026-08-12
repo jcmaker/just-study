@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 460" width="1280" height="460" role="img" aria-label="하루의 흐름: 강의에서 퀴즈로 가고, 5문제를 모두 맞히면 회고를 거쳐 Day가 완료되며, 하나라도 틀리면 보완 학습을 거쳐 새 다섯 문제로 퀴즈에 다시 들어갑니다">
+  <title>하루가 어떻게 흘러가나</title>
+
+  <!-- Focus theme: white paper, black ink, red primary, yellow accent, zero radius. -->
+  <rect width="1280" height="460" fill="#ffffff"/>
+  <rect x="0" y="0" width="1280" height="460" fill="none" stroke="#000000" stroke-width="16"/>
+
+  <g font-family="'SF Mono', 'Courier New', monospace" font-size="14" font-weight="600" letter-spacing="2">
+    <text x="76" y="72" fill="#4a4a4a">한 DAY의 흐름 — 건너뛸 수 없음</text>
+  </g>
+
+  <!-- ── main track ─────────────────────────────────────────────── -->
+  <g font-family="'Helvetica Neue', Helvetica, Arial, sans-serif">
+
+    <!-- 강의 -->
+    <rect x="76" y="112" width="196" height="96" fill="#ffffff" stroke="#000000" stroke-width="4"/>
+    <text x="174" y="152" font-size="28" font-weight="800" fill="#000000" text-anchor="middle">강의</text>
+    <text x="174" y="182" font-size="15" font-weight="400" fill="#4a4a4a" text-anchor="middle">설명 · 비유 · 예제</text>
+
+    <path d="M272 160 H 340" stroke="#000000" stroke-width="4" fill="none"/>
+    <path d="M340 160 l -16 -9 v 18 z" fill="#000000"/>
+
+    <!-- 퀴즈 -->
+    <rect x="344" y="112" width="196" height="96" fill="#ffd84a" stroke="#000000" stroke-width="4"/>
+    <text x="442" y="152" font-size="28" font-weight="800" fill="#000000" text-anchor="middle">퀴즈</text>
+    <text x="442" y="182" font-size="15" font-weight="400" fill="#000000" text-anchor="middle">사지선다 5문제</text>
+
+    <path d="M540 160 H 604" stroke="#000000" stroke-width="4" fill="none"/>
+
+    <!-- gate -->
+    <rect x="604" y="122" width="128" height="76" fill="#c60000"/>
+    <text x="668" y="154" font-size="21" font-weight="800" fill="#ffffff" text-anchor="middle">채점</text>
+    <text x="668" y="180" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle" font-family="'SF Mono', 'Courier New', monospace">서버가 한다</text>
+
+    <!-- pass branch -->
+    <path d="M732 160 H 812" stroke="#000000" stroke-width="4" fill="none"/>
+    <path d="M812 160 l -16 -9 v 18 z" fill="#000000"/>
+    <text x="772" y="146" font-size="15" font-weight="700" fill="#000000" text-anchor="middle">5 / 5</text>
+
+    <!-- 회고 -->
+    <rect x="816" y="112" width="180" height="96" fill="#ffffff" stroke="#000000" stroke-width="4"/>
+    <text x="906" y="152" font-size="28" font-weight="800" fill="#000000" text-anchor="middle">회고</text>
+    <text x="906" y="182" font-size="15" font-weight="400" fill="#4a4a4a" text-anchor="middle">세 가지 질문</text>
+
+    <path d="M996 160 H 1060" stroke="#000000" stroke-width="4" fill="none"/>
+    <path d="M1060 160 l -16 -9 v 18 z" fill="#000000"/>
+
+    <!-- Day 완료 -->
+    <rect x="1064" y="112" width="140" height="96" fill="#000000"/>
+    <text x="1134" y="150" font-size="22" font-weight="800" fill="#ffffff" text-anchor="middle">Day</text>
+    <text x="1134" y="180" font-size="22" font-weight="800" fill="#ffffff" text-anchor="middle">완료</text>
+
+    <!-- ── fail branch: gate drops down, loops back into 퀴즈 ──────── -->
+    <path d="M668 198 V 300" stroke="#c60000" stroke-width="4" fill="none"/>
+    <path d="M668 300 l -9 -16 h 18 z" fill="#c60000"/>
+    <text x="690" y="248" font-size="15" font-weight="700" fill="#c60000">하나라도 틀리면</text>
+
+    <!-- 보완 학습 -->
+    <rect x="472" y="300" width="392" height="88" fill="#ffffff" stroke="#c60000" stroke-width="4"/>
+    <text x="668" y="336" font-size="25" font-weight="800" fill="#000000" text-anchor="middle">보완 학습</text>
+    <text x="668" y="364" font-size="15" font-weight="400" fill="#4a4a4a" text-anchor="middle">다른 비유로 다시 설명 · 겹치지 않는 새 5문제</text>
+
+    <!-- loop back up into 퀴즈 -->
+    <path d="M472 344 H 442 V 208" stroke="#c60000" stroke-width="4" fill="none"/>
+    <path d="M442 208 l -9 16 h 18 z" fill="#c60000"/>
+  </g>
+
+  <!-- ── footnote ───────────────────────────────────────────────── -->
+  <g font-family="'SF Mono', 'Courier New', monospace" font-size="14" font-weight="600">
+    <rect x="76" y="404" width="10" height="10" fill="#c60000"/>
+    <text x="100" y="414" fill="#4a4a4a">회고는 5/5를 맞혀야 열립니다. 통과할 때까지 퀴즈와 보완 학습을 오갑니다.</text>
+  </g>
+</svg>

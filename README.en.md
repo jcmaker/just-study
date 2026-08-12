@@ -34,6 +34,12 @@ Once you approve it, the agent teaches. It explains, gives an analogy, works an 
 > This is the opposite of a dashboard where you upload your own material.
 > Here, **you never gather the sources.**
 
+<p align="center">
+  <img src="docs/images/architecture.svg" alt="Architecture: only the agent reaches the open web, and it owns research, teaching, and question authoring. The MCP server validates, stores, and grades — it never calls an LLM or searches the web. Storage is SQLite plus Markdown under the home directory, and the dashboard is a second client of the same server." width="100%">
+</p>
+
+Judgment and storage are split. Research, teaching, and question authoring all happen in the agent; the server only validates what comes back and files it. **There is no LLM in the server.** That separation is what lets a rule, rather than good intentions, stop an invented URL from being stored.
+
 ## Getting started
 
 ```bash
@@ -61,9 +67,11 @@ $just-study 계속
 
 A day moves in one fixed order. You cannot skip ahead.
 
-```
-lecture → quiz → remediation → reflection → day complete
-```
+<p align="center">
+  <img src="docs/images/day-flow.svg" alt="The day flow: lecture leads to the quiz. Five out of five opens reflection and completes the day. A single wrong answer routes into remediation and back into the quiz with five new questions." width="100%">
+</p>
+
+The line is not straight. **Reflection opens only at 5/5**, so the day loops between quiz and remediation until you clear it. (The diagram is labelled in Korean, like the product.)
 
 | Stage | What happens |
 |---|---|
@@ -79,6 +87,12 @@ Thirty days means **thirty completed sessions**, not thirty consecutive calendar
 Ask an agent to "find good sources" and sooner or later it invents a plausible URL. This project spends its rules on preventing that.
 
 **A fixed 100-point rubric.** The criteria are written down before the search starts, and only those criteria are scored.
+
+<p align="center">
+  <img src="docs/images/rubric.svg" alt="Point allocation: authority 25, cross-validation 25, fit 20, teaching quality 15, currency 10, accessibility 5. A source scoring under 80 is never selected." width="100%">
+</p>
+
+Where the points sit is the argument. **Authority and cross-validation are half the rubric on their own** — whether a source can be trusted outranks how well it is written.
 
 | Criterion | Points |
 |---|---:|
