@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { registerHooks } from "node:module";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
@@ -39,7 +39,7 @@ import {
 } from "../src/server/courses.ts";
 import { openDatabase, SCHEMA_VERSION } from "../src/server/database.ts";
 import { getHealth } from "../src/server/health.ts";
-import { getRuntime, requireDatabase } from "../src/server/runtime.ts";
+import { getReadOnlyRuntime, getRuntime, requireDatabase } from "../src/server/runtime.ts";
 import {
   discardCourseDraft,
   finalizeCourseFiles,
@@ -1085,6 +1085,26 @@ test("keeps one hot-reload-safe runtime for the configured data root", () => {
     clearTestRuntime();
     restoreDataRootEnvironment(previous);
     rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("anchors the default data root to the home directory, not the working directory", () => {
+  // cwd 기준이면 레포에서 띄울 때와 플러그인 캐시에서 띄울 때 저장소가 갈린다.
+  const previous = process.env.JUST_STUDY_DATA_DIR;
+  delete process.env.JUST_STUDY_DATA_DIR;
+  clearTestRuntime();
+
+  try {
+    const runtime = getReadOnlyRuntime();
+    try {
+      assert.equal(runtime.dataRoot, join(homedir(), ".just-study", "data"));
+      assert.notEqual(runtime.dataRoot, resolve(process.cwd(), "data"));
+    } finally {
+      runtime.close();
+    }
+  } finally {
+    clearTestRuntime();
+    restoreDataRootEnvironment(previous);
   }
 });
 

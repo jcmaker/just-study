@@ -9,7 +9,7 @@ dependencies:
       value: "just-study"
       description: "Local just-study learning state and persistence tools"
       transport: "streamable_http"
-      url: "http://127.0.0.1:3000/mcp"
+      url: "http://127.0.0.1:5878/mcp"
 
 policy:
   allow_implicit_invocation: false

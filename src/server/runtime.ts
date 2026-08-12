@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import type { DatabaseHandle } from "./database.ts";
@@ -15,9 +16,12 @@ const runtimeGlobal = globalThis as typeof globalThis & {
   __justStudyRuntime?: Runtime;
 };
 
+// 저장 위치는 실행 디렉터리와 무관해야 한다. cwd 기준이면 레포에서 띄울 때와
+// 플러그인 캐시에서 띄울 때 저장소가 조용히 둘로 갈리고, 캐시 쪽은 플러그인을
+// 업데이트하면 사라진다.
 function resolveDataRoot(): string {
   return resolve(
-    process.env.JUST_STUDY_DATA_DIR ?? resolve(process.cwd(), "data"),
+    process.env.JUST_STUDY_DATA_DIR ?? join(homedir(), ".just-study", "data"),
   );
 }
 

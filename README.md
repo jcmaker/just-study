@@ -7,7 +7,7 @@
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-22.23.1%2B-000?style=flat-square">
   <img alt="storage" src="https://img.shields.io/badge/storage-SQLite%20%2B%20Markdown-000?style=flat-square">
   <img alt="MCP" src="https://img.shields.io/badge/MCP-12%20tools-c60000?style=flat-square">
-  <img alt="tests" src="https://img.shields.io/badge/tests-262%20passing-000?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-267%20passing-000?style=flat-square">
 </p>
 
 <p align="center">
@@ -43,7 +43,7 @@ npm install
 npm run dev
 ```
 
-브라우저에서 <http://127.0.0.1:3000>을 엽니다. 그다음 이 저장소에서 연 Codex 세션에 이렇게 입력합니다. Claude Code에서는 `/just-study`입니다.
+브라우저에서 <http://127.0.0.1:5878>을 엽니다. 그다음 이 저장소에서 연 Codex 세션에 이렇게 입력합니다. Claude Code에서는 `/just-study`입니다.
 
 ```
 $just-study
@@ -119,7 +119,7 @@ $just-study 계속
 
 ## 대시보드
 
-`npm run dev` 뒤 브라우저에서 <http://127.0.0.1:3000>을 엽니다. 로그인·가입·계정이 없고 서버는 `127.0.0.1`에만 바인딩합니다.
+`npm run dev` 뒤 브라우저에서 <http://127.0.0.1:5878>을 엽니다. 로그인·가입·계정이 없고 서버는 `127.0.0.1`에만 바인딩합니다.
 
 | 경로 | 화면 | 주요 행동 |
 |---|---|---|
@@ -161,7 +161,7 @@ MCP 엔드포인트는 서버가 떠 있는 동안에만 열립니다. Codex는 
 
 ```toml
 [mcp_servers.just-study]
-url = "http://127.0.0.1:3000/mcp"
+url = "http://127.0.0.1:5878/mcp"
 required = false
 default_tools_approval_mode = "writes"
 ```
@@ -175,7 +175,7 @@ Claude Code는 같은 엔드포인트를 저장소의 `.mcp.json`에서 읽습�
 /plugin install just-study@just-study
 ```
 
-플러그인은 스킬만 옮깁니다. 학습 기록은 여전히 내 컴퓨터의 서버에만 있으므로, 저장소를 클론해서 `npm run dev`를 띄워 두는 건 그대로 필요합니다.
+서버는 `/just-study`를 부를 때 에이전트가 직접 띄웁니다. 직접 `npm run dev`를 실행해 둘 필요는 없습니다. 다만 서버가 꺼진 채로 세션이 시작됐다면 MCP 클라이언트가 그 세션에서는 다시 붙지 않으므로, 첫 회에 한 번 세션을 새로 열어야 합니다.
 
 스킬 파일은 `.agents/skills/just-study/SKILL.md` 한 벌뿐입니다. Claude Code가 읽는 `.claude/skills/just-study/SKILL.md`는 이 파일을 가리키는 심링크라 두 에이전트가 항상 같은 규칙을 따릅니다. 리서치·강의·채점 판단은 전부 스킬이 하고 서버는 저장과 검증만 맡습니다.
 
@@ -200,10 +200,10 @@ Claude Code는 같은 엔드포인트를 저장소의 `.mcp.json`에서 읽습�
 
 ## 데이터가 어디에 저장되나
 
-모든 영구 데이터는 `data/` 아래에 있고 Git에는 올라가지 않습니다.
+모든 영구 데이터는 `~/.just-study/data/` 아래에 있습니다. 실행 디렉터리와 무관한 고정 위치라, 저장소에서 띄우든 플러그인 설치본에서 띄우든 같은 곳을 봅니다.
 
 ```
-data/
+~/.just-study/data/
 ├── just-study.sqlite              구조화 상태
 └── courses/<course-id>/
     ├── course.md                  리서치 본문, 지식 지도, 30일 목차
@@ -216,12 +216,12 @@ data/
 
 다른 위치를 쓰려면 `JUST_STUDY_DATA_DIR`를 지정하세요.
 
-WAL 모드로 도는 중에 `just-study.sqlite` 하나만 복사하면 안 됩니다. 실행 중 안전한 백업은 다음 단계에서 다룹니다. 지금은 앱을 멈추고 `data/` 디렉터리 전체를 복사하세요.
+WAL 모드로 도는 중에 `just-study.sqlite` 하나만 복사하면 안 됩니다. 실행 중 안전한 백업은 다음 단계에서 다룹니다. 지금은 앱을 멈추고 `~/.just-study/data/` 디렉터리 전체를 복사하세요.
 
 ## 개발
 
 ```bash
-npm test          # Node 표준 테스트 러너, 262개
+npm test          # Node 표준 테스트 러너, 267개
 npm run lint
 npx tsc --noEmit
 npm run build

@@ -22,7 +22,7 @@ test("keeps the just-study skill explicit and instruction-only", () => {
   assert.match(metadata, /allow_implicit_invocation: false/);
   assert.match(metadata, /value: "just-study"/);
   assert.match(metadata, /transport: "streamable_http"/);
-  assert.match(metadata, /url: "http:\/\/127\.0\.0\.1:3000\/mcp"/);
+  assert.match(metadata, /url: "http:\/\/127\.0\.0\.1:5878\/mcp"/);
 });
 
 test("names every approved tool and all research safety invariants", () => {
@@ -92,6 +92,31 @@ test("pins the mutually exclusive checkpoint shapes and the health ok:false rule
     assert.match(skill, new RegExp(phrase));
 });
 
+test("starts the local server itself instead of handing the user a command", () => {
+  for (const phrase of [
+    "start the server yourself",
+    "`npm run dev` as a background process",
+    "three levels above this skill directory",
+    // 같은 세션에 붙지 않는다는 사실을 지우면 무한 재시도가 된다.
+    "does not attach it to a running session",
+    // 훅으로 상시 기동하면 공부하지 않는 모든 세션에서 서버가 뜬다.
+    "Start the server only from this skill",
+    "never add a session hook",
+  ])
+    assert.ok(skill.includes(phrase), phrase);
+  // 사용자에게 직접 클론/실행을 시키던 옛 계약이 되살아나면 걸린다.
+  assert.equal(skill.includes("tell the user to clone"), false);
+});
+
+test("keeps the whole project on the just-study port, not the crowded 3000", () => {
+  // 5878 = 전화 키패드의 J-U-S-T. 흔한 dev 포트와 겹치지 않는 게 요점이다.
+  const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+  assert.match(pkg.scripts.dev, /--port 5878\b/);
+  assert.match(pkg.scripts.start, /--port 5878\b/);
+  for (const source of [skill, metadata, config])
+    assert.equal(source.includes("127.0.0.1:3000"), false);
+});
+
 test("distinguishes new URL provenance from approved saved-source reuse", () => {
   assert.match(skill, /when it was newly researched/);
   assert.match(skill, /current session transcript/);
@@ -114,7 +139,7 @@ test("uses nested local research keys before server canonicalization", () => {
 
 test("keeps project MCP config aligned with the skill dependency", () => {
   assert.match(config, /\[mcp_servers\.just-study\]/);
-  assert.match(config, /url = "http:\/\/127\.0\.0\.1:3000\/mcp"/);
+  assert.match(config, /url = "http:\/\/127\.0\.0\.1:5878\/mcp"/);
   assert.match(config, /required = false/);
   assert.match(config, /default_tools_approval_mode = "writes"/);
   assert.equal(existsSync(resolve(skillRoot, "scripts")), false);
@@ -131,7 +156,7 @@ test("serves the same skill and MCP endpoint to Claude Code", () => {
   const mcp = JSON.parse(readFileSync(resolve(root, ".mcp.json"), "utf8"));
   assert.deepEqual(mcp.mcpServers["just-study"], {
     type: "http",
-    url: "http://127.0.0.1:3000/mcp",
+    url: "http://127.0.0.1:5878/mcp",
   });
 });
 

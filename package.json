@@ -36,9 +36,9 @@
     "node": ">=22.23.1"
   },
   "scripts": {
-    "dev": "next dev --hostname 127.0.0.1",
+    "dev": "next dev --hostname 127.0.0.1 --port 5878",
     "build": "next build",
-    "start": "next start --hostname 127.0.0.1",
+    "start": "next start --hostname 127.0.0.1 --port 5878",
     "lint": "eslint .",
     "test": "node --test tests/platform-foundation.test.ts tests/learning-engine.test.ts tests/mcp.test.ts tests/codex-skill.test.ts tests/dashboard.test.ts"
   },

@@ -7,7 +7,7 @@
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-22.23.1%2B-000?style=flat-square">
   <img alt="storage" src="https://img.shields.io/badge/storage-SQLite%20%2B%20Markdown-000?style=flat-square">
   <img alt="MCP" src="https://img.shields.io/badge/MCP-12%20tools-c60000?style=flat-square">
-  <img alt="tests" src="https://img.shields.io/badge/tests-262%20passing-000?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-267%20passing-000?style=flat-square">
 </p>
 
 <p align="center">
@@ -43,7 +43,7 @@ npm install
 npm run dev
 ```
 
-Open <http://127.0.0.1:3000>. Then, from a Codex session opened in this repository — or `/just-study` in Claude Code:
+Open <http://127.0.0.1:5878>. Then, from a Codex session opened in this repository — or `/just-study` in Claude Code:
 
 ```
 $just-study
@@ -113,7 +113,7 @@ The automated tests drive all thirty days through an MCP client, but nobody has 
 
 ## Dashboard
 
-After `npm run dev`, open <http://127.0.0.1:3000>. There is no login, signup, or account, and the server binds to `127.0.0.1` only.
+After `npm run dev`, open <http://127.0.0.1:5878>. There is no login, signup, or account, and the server binds to `127.0.0.1` only.
 
 | Route | Screen | What you do there |
 |---|---|---|
@@ -149,7 +149,7 @@ The MCP endpoint is open only while the server runs. Codex reads the connection 
 
 ```toml
 [mcp_servers.just-study]
-url = "http://127.0.0.1:3000/mcp"
+url = "http://127.0.0.1:5878/mcp"
 required = false
 default_tools_approval_mode = "writes"
 ```
@@ -163,7 +163,7 @@ To use it outside the repository, install it as a plugin. The skill and the MCP 
 /plugin install just-study@just-study
 ```
 
-The plugin carries only the skill. Your course lives on your own machine, so you still clone the repository and keep `npm run dev` running.
+The agent starts the server itself when you call `/just-study`, so you do not need to keep `npm run dev` running. If the session began while the server was down, the MCP client will not reconnect within that session — restart the session once, and it stays connected from then on.
 
 There is one copy of the skill, at `.agents/skills/just-study/SKILL.md`. The path Claude Code reads, `.claude/skills/just-study/SKILL.md`, is a symlink to it, so both agents follow the same rules. Research, teaching, and question authoring are the skill's job; the server only stores and validates.
 
@@ -188,10 +188,10 @@ There is one copy of the skill, at `.agents/skills/just-study/SKILL.md`. The pat
 
 ## Where your data lives
 
-Everything persistent sits under `data/`, which Git ignores.
+Everything persistent sits under `~/.just-study/data/`. The location is fixed and independent of the working directory, so the repository and an installed plugin both read the same store.
 
 ```
-data/
+~/.just-study/data/
 ├── just-study.sqlite              structured state
 └── courses/<course-id>/
     ├── course.md                  research narrative, knowledge map, 30-day outline
@@ -204,12 +204,12 @@ data/
 
 Point `JUST_STUDY_DATA_DIR` somewhere else to use a different location.
 
-Do not copy `just-study.sqlite` alone while the app is running in WAL mode. Safe live backup belongs to a later phase. For now, stop the app and copy the whole `data/` directory.
+Do not copy `just-study.sqlite` alone while the app is running in WAL mode. Safe live backup belongs to a later phase. For now, stop the app and copy the whole `~/.just-study/data/` directory.
 
 ## Development
 
 ```bash
-npm test          # Node's built-in test runner, 262 tests
+npm test          # Node's built-in test runner, 267 tests
 npm run lint
 npx tsc --noEmit
 npm run build
