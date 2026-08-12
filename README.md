@@ -43,7 +43,7 @@ npm install
 npm run dev
 ```
 
-브라우저에서 <http://127.0.0.1:3000>을 엽니다. 그다음 이 저장소에서 연 Codex 세션에 이렇게 입력합니다.
+브라우저에서 <http://127.0.0.1:3000>을 엽니다. 그다음 이 저장소에서 연 Codex 세션에 이렇게 입력합니다. Claude Code에서는 `/just-study`입니다.
 
 ```
 $just-study
@@ -155,7 +155,7 @@ Focus(기본), Calm, Focus Dark, Bubblegum, Terminal 다섯 가지를 제공합�
 
 승인된 30일 목차, 출처 점수, 퀴즈 문제와 채점 결과, 완료된 Day는 읽기 전용입니다. 다른 곳에서 과정이 먼저 저장되면 저장을 거부합니다. 입력한 내용은 그대로 둔 채 최신 상태를 다시 불러오도록 안내합니다. 체크섬 검증에 실패한 문서는 정상 내용처럼 표시하지 않고 `/status` 복구 안내로 연결합니다.
 
-## Codex 연결
+## 에이전트 연결
 
 MCP 엔드포인트는 서버가 떠 있는 동안에만 열립니다. Codex는 `.codex/config.toml`에서 연결 정보를 읽습니다.
 
@@ -166,9 +166,20 @@ required = false
 default_tools_approval_mode = "writes"
 ```
 
-스킬 파일은 `.agents/skills/just-study/SKILL.md`에 있습니다. 리서치·강의·채점 판단은 전부 스킬이 하고 서버는 저장과 검증만 맡습니다.
+Claude Code는 같은 엔드포인트를 저장소의 `.mcp.json`에서 읽습니다. 세션을 처음 열 때 이 서버를 신뢰할지 한 번 물어봅니다.
 
-`$just-study`를 부르면 먼저 같은 주제의 과정이 있는지 확인하고 이어갈지 새로 만들지 묻습니다. `$just-study 계속`은 저장된 과정을 재개하며, 여러 개면 어느 것인지 물어봅니다.
+저장소 밖에서도 쓰고 싶으면 플러그인으로 설치합니다. 스킬과 MCP 설정이 함께 따라와서 어느 디렉터리에서든 `/just-study`를 부를 수 있습니다.
+
+```
+/plugin marketplace add jcmaker/just-study
+/plugin install just-study@just-study
+```
+
+플러그인은 스킬만 옮깁니다. 학습 기록은 여전히 내 컴퓨터의 서버에만 있으므로, 저장소를 클론해서 `npm run dev`를 띄워 두는 건 그대로 필요합니다.
+
+스킬 파일은 `.agents/skills/just-study/SKILL.md` 한 벌뿐입니다. Claude Code가 읽는 `.claude/skills/just-study/SKILL.md`는 이 파일을 가리키는 심링크라 두 에이전트가 항상 같은 규칙을 따릅니다. 리서치·강의·채점 판단은 전부 스킬이 하고 서버는 저장과 검증만 맡습니다.
+
+`$just-study`(Claude Code에서는 `/just-study`)를 부르면 먼저 같은 주제의 과정이 있는지 확인하고 이어갈지 새로 만들지 묻습니다. `$just-study 계속`은 저장된 과정을 재개하며, 여러 개면 어느 것인지 물어봅니다.
 
 ### MCP 도구
 
