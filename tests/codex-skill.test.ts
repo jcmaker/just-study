@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 
@@ -94,10 +94,10 @@ test("pins the mutually exclusive checkpoint shapes and the health ok:false rule
 
 test("distinguishes new URL provenance from approved saved-source reuse", () => {
   assert.match(skill, /when it was newly researched/);
-  assert.match(skill, /current persisted Codex thread/);
+  assert.match(skill, /current session transcript/);
   assert.match(skill, /approved saved URLs/);
   assert.match(skill, /explicit reuse approval/);
-  assert.match(skill, /does not require a new `openPage` event/);
+  assert.match(skill, /does not require a new page-open event/);
 });
 
 test("uses nested local research keys before server canonicalization", () => {
@@ -120,4 +120,39 @@ test("keeps project MCP config aligned with the skill dependency", () => {
   assert.equal(existsSync(resolve(skillRoot, "scripts")), false);
   assert.equal(existsSync(resolve(skillRoot, "references")), false);
   assert.equal(existsSync(resolve(skillRoot, "assets")), false);
+});
+
+test("serves the same skill and MCP endpoint to Claude Code", () => {
+  // Claude Code는 .claude/skills만 읽는다. 사본이 아니라 심링크여야 두 벌이 어긋나지 않는다.
+  const claudeSkill = resolve(root, ".claude/skills/just-study/SKILL.md");
+  assert.equal(realpathSync(claudeSkill), resolve(skillRoot, "SKILL.md"));
+  assert.equal(lstatSync(claudeSkill).isSymbolicLink(), true);
+
+  const mcp = JSON.parse(readFileSync(resolve(root, ".mcp.json"), "utf8"));
+  assert.deepEqual(mcp.mcpServers["just-study"], {
+    type: "http",
+    url: "http://127.0.0.1:3000/mcp",
+  });
+});
+
+test("stays installable as a Claude Code plugin from this repository", () => {
+  const read = (name: string) =>
+    JSON.parse(readFileSync(resolve(root, ".claude-plugin", name), "utf8"));
+  const plugin = read("plugin.json");
+  const market = read("marketplace.json");
+  const entry = market.plugins.find((p: { name: string }) => p.name === "just-study");
+
+  // 선언한 스킬 경로가 실재해야 설치본에서 스킬이 조용히 사라지지 않는다.
+  assert.deepEqual(plugin.skills, ["./.agents/skills/just-study"]);
+  assert.equal(existsSync(resolve(root, plugin.skills[0], "SKILL.md")), true);
+
+  // 저장소 루트가 곧 플러그인 루트다. .mcp.json이 설치본에 함께 실려야 MCP가 붙는다.
+  assert.equal(entry.source, "./");
+  assert.equal(existsSync(resolve(root, ".mcp.json")), true);
+
+  // Claude Code는 plugin.json과 마켓플레이스 항목의 version이 다르면 설치를 거부한다.
+  const version = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")).version;
+  assert.equal(plugin.version, version);
+  assert.equal(entry.version, version);
+  assert.equal(market.metadata.version, version);
 });

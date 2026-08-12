@@ -43,7 +43,7 @@ npm install
 npm run dev
 ```
 
-Open <http://127.0.0.1:3000>. Then, from a Codex session opened in this repository:
+Open <http://127.0.0.1:3000>. Then, from a Codex session opened in this repository — or `/just-study` in Claude Code:
 
 ```
 $just-study
@@ -143,7 +143,7 @@ Quiz answer keys are not sent to the browser until you answer, so you cannot ope
 
 The approved 30-day outline, source scores, quiz questions and results, and completed days are read-only. If the course was saved elsewhere first, your save is refused, your input is kept, and you are asked to reload the current state. A document that fails its checksum is never shown as if it were intact; you get a recovery link to `/status`.
 
-## Connecting Codex
+## Connecting an agent
 
 The MCP endpoint is open only while the server runs. Codex reads the connection from `.codex/config.toml`:
 
@@ -154,9 +154,20 @@ required = false
 default_tools_approval_mode = "writes"
 ```
 
-The skill lives at `.agents/skills/just-study/SKILL.md`. Research, teaching, and question authoring are the skill's job; the server only stores and validates.
+Claude Code reads the same endpoint from `.mcp.json` in the repository, and asks once per session whether to trust the server.
 
-`$just-study` first checks for a course on the same topic and asks whether to continue it. `$just-study 계속` resumes a saved course, asking which one when several exist.
+To use it outside the repository, install it as a plugin. The skill and the MCP config travel together, so `/just-study` works from any directory.
+
+```
+/plugin marketplace add jcmaker/just-study
+/plugin install just-study@just-study
+```
+
+The plugin carries only the skill. Your course lives on your own machine, so you still clone the repository and keep `npm run dev` running.
+
+There is one copy of the skill, at `.agents/skills/just-study/SKILL.md`. The path Claude Code reads, `.claude/skills/just-study/SKILL.md`, is a symlink to it, so both agents follow the same rules. Research, teaching, and question authoring are the skill's job; the server only stores and validates.
+
+`$just-study` (`/just-study` in Claude Code) first checks for a course on the same topic and asks whether to continue it. `$just-study 계속` resumes a saved course, asking which one when several exist.
 
 ### MCP tools
 

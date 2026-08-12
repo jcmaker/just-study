@@ -1,0 +1,20 @@
+{
+  "name": "just-study",
+  "owner": {
+    "name": "jcmaker",
+    "url": "https://github.com/jcmaker"
+  },
+  "metadata": {
+    "description": "검증된 30일 학습 과정을 만들고 이어가는 self-hosted 학습 에이전트 스킬",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "just-study",
+      "source": "./",
+      "version": "0.1.0",
+      "description": "Pick a topic and the agent researches sources, scores them, and builds a 30-day course you study one day at a time. Needs the self-hosted just-study server running on localhost.",
+      "keywords": ["learning", "study", "course", "mcp", "self-hosted"]
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+../../../.agents/skills/just-study/SKILL.md

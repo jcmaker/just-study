@@ -1,6 +1,6 @@
 ---
 name: just-study
-description: Create or continue a researched 30-Day just-study learning course through the local MCP server. Use only when the user explicitly invokes $just-study or $just-study 계속.
+description: Create or continue a researched 30-Day just-study learning course through the local MCP server. Use only when the user explicitly invokes just-study — `$just-study` in Codex, `/just-study` in Claude Code — optionally with 계속 to resume.
 ---
 
 # Just Study
@@ -9,7 +9,7 @@ Use the local `just-study` MCP as the only source of persisted course state. Per
 
 ## Invariants
 
-1. Call `health` first. If the call itself is unavailable, tell the user to run `npm run dev` in the repository and stop. If it reports `state: "uninitialized"`, explain that the first approved `create_course` write will initialize this computer's empty local store, then continue the new-course flow. If it reports `ok: false`, surface its Korean `message` to the user — it describes a schema mismatch, storage inconsistency, or corrupt, orphaned, or temporary entries — and stop.
+1. Call `health` first. If the call itself is unavailable, the local server is not running: tell the user to clone <https://github.com/jcmaker/just-study> if they have not, then run `npm run dev` in it, and stop. If it reports `state: "uninitialized"`, explain that the first approved `create_course` write will initialize this computer's empty local store, then continue the new-course flow. If it reports `ok: false`, surface its Korean `message` to the user — it describes a schema mismatch, storage inconsistency, or corrupt, orphaned, or temporary entries — and stop.
 2. Use the latest saved `revision` for every write except `create_course`.
 3. On `REVISION_CONFLICT`, read state again and explain the conflict. Do not replay the write automatically.
 4. On `STORAGE_CORRUPT`, stop. Do not overwrite or attempt repair through MCP.
@@ -29,7 +29,7 @@ Call `list_courses` after health.
 1. Ask for existing knowledge, the concrete Day 30 outcome, and learning preference one question at a time. Reuse answers already supplied by the user.
 2. Generate one UUID request ID and reuse it if `create_course` must be called again. Store the draft with the topic as title and the Day 30 outcome as goal.
 3. Before searching, write the research questions, the fixed 100-point rubric, and topic-specific selection criteria.
-4. Browse actual primary, official, university, standards, and strong educational sources. Open every URL before submitting it through `approve_outline` or `record_daily_research` when it was newly researched; the matching `openPage` event must exist in the current persisted Codex thread. Approved saved URLs follow the explicit reuse flow below instead.
+4. Browse actual primary, official, university, standards, and strong educational sources. Open every URL before submitting it through `approve_outline` or `record_daily_research` when it was newly researched; the matching page-open event from your own browsing tool must exist in the current session transcript. Approved saved URLs follow the explicit reuse flow below instead.
 5. Score authority 0–25, cross-validation 0–25, relevance 0–20, teaching quality 0–15, currency 0–10, and accessibility 0–5. Rank every candidate. Explain selection and limitations.
 6. Support every major claim with at least two selected sources scoring at least 80 and having different independence keys. Record opposition and uncertainty.
 7. Build exactly 30 ordered Days. Give each Day one observable objective.
@@ -73,7 +73,7 @@ Ask what was learned, what remains confusing, and how the learner feels. After a
 
 ## When web is unavailable
 
-Do not claim new research and do not create URLs. If approved saved sources are relevant, ask whether to reuse them with their known limitations. Only after explicit reuse approval may you submit a Day research bundle containing those approved saved URLs; this reuse does not require a new `openPage` event. If no relevant approved source exists, stop until web access is available.
+Do not claim new research and do not create URLs. If approved saved sources are relevant, ask whether to reuse them with their known limitations. Only after explicit reuse approval may you submit a Day research bundle containing those approved saved URLs; this reuse does not require a new page-open event. If no relevant approved source exists, stop until web access is available.
 
 ## Responses
 

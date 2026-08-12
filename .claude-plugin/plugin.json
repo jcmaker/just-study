@@ -1,0 +1,14 @@
+{
+  "name": "just-study",
+  "version": "0.1.0",
+  "description": "Pick a topic and the agent researches sources, scores them, and builds a 30-day course you study one day at a time. Needs the self-hosted just-study server running on localhost.",
+  "author": {
+    "name": "jcmaker",
+    "email": "jcmaker0627@gmail.com"
+  },
+  "homepage": "https://github.com/jcmaker/just-study#readme",
+  "repository": "https://github.com/jcmaker/just-study",
+  "license": "MIT",
+  "keywords": ["learning", "study", "course", "mcp", "self-hosted"],
+  "skills": ["./.agents/skills/just-study"]
+}
