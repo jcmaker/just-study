@@ -1,6 +1,6 @@
 {
   "name": "just-study",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pick a topic and an agent researches sources, scores them, and builds a 30-day course you study one day at a time. Self-hosted, localhost only.",
   "license": "MIT",
   "author": "jcmaker <jcmaker0627@gmail.com>",
