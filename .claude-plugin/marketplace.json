@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "검증된 30일 학습 과정을 만들고 이어가는 self-hosted 학습 에이전트 스킬",
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "plugins": [
     {
       "name": "just-study",
       "source": "./",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "description": "Pick a topic and the agent researches sources, scores them, and builds a 30-day course you study one day at a time. Runs entirely on your own machine; the skill starts the local server itself.",
       "keywords": ["learning", "study", "course", "mcp", "self-hosted"]
     }

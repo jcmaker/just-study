@@ -1,6 +1,6 @@
 {
   "name": "just-study",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Pick a topic and the agent researches sources, scores them, and builds a 30-day course you study one day at a time. Runs entirely on your own machine; the skill starts the local server itself.",
   "author": {
     "name": "jcmaker",
